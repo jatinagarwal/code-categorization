@@ -2,6 +2,8 @@
 import keyword, re, math
 from pyspark import SparkContext
 from stemming.porter2 import stem
+from pyspark.mllib.feature import HashingTF
+from pyspark.mllib.feature import IDF
 from itertools import groupby
 
 keywords = ['abstract', 'continue', 'for', 'new', 'switch', 'assert', 'default', 'goto', 'package', 'synchronized',
@@ -36,9 +38,16 @@ def removeComment(inp):
 	return out2
 
 def wordCount(inp):
-	out3 = [(key,len(list(group))) for key, group in groupby(inp)]
-	return out3
+	hashingTF = HashingTF()
+	tf = hashingTF.transform(inp)
+	# out3 = [(key,len(list(group))) for key, group in groupby(inp)]
+	# return out3
+	return tf
 
+def tfidfComputation(inp):
+	idf = IDF().fit(inp)
+	tfidf = idf.transform(inp)
+	return tfidf
 
 
 def removeReserveWords(inp, keyword):
@@ -79,6 +88,12 @@ withoutComments = distFile.mapValues(removeComment)
 # distFile.unpersist()
 wordCounts = withoutComments.mapValues(wordCount)
 wordCounts.persist()
+sparseVectors = wordCounts.values()
+sparseVectors.cache()
+sparseVectorsKeys = wordCounts.keys()
+# tfidf = sparseVectors.mapValues(tfidfComputation)
+idf = IDF().fit(sparseVectors)
+tfidf = idf.transform(sparseVectors)
 
 #withoutSpecialChar = withoutComments.mapValues(removeSpecialChar)
 
@@ -93,15 +108,30 @@ wordCounts.persist()
 # lp = countWords.lookup('/home/jatina/Downloads/spark-1.3.1/samplePy/parquet_inputformat.py')
 distFileMap = withoutComments.collectAsMap()
 wordCountPairs = wordCounts.collectAsMap()
-onlyValues = wordCounts.values().collect()
-vocabulary = vocab(onlyValues)
-vocabularyRDD = sc.parallelize(vocabulary)
-wordList = vocabularyRDD.keys().collect()
-wordList.sort()
-wordSet = list(set(wordList))
-wordSet.sort()
-wordCountVectors = wordCounts.mapValues(wordCountVector)
-vectors = wordCountVectors.collectAsMap()
+
+# idfCollect = idf.collect()
+
+tfidfCollection = tfidf.collect()
+D = len(tfidfCollection)
+print tfidfCollection
+print D
+# for element in tfidfCollection:
+# 	print element
+
+print wordCountPairs
+print idf
+
+# print distFileMap
+# print len(tfidfCollection)
+# onlyValues = wordCounts.values().collect()
+# vocabulary = vocab(onlyValues)
+# vocabularyRDD = sc.parallelize(vocabulary)
+# wordList = vocabularyRDD.keys().collect()
+# wordList.sort()
+# wordSet = list(set(wordList))
+# wordSet.sort()
+# wordCountVectors = wordCounts.mapValues(wordCountVector)
+# vectors = wordCountVectors.collectAsMap()
 
 
 # print fileCount
@@ -112,52 +142,54 @@ vectors = wordCountVectors.collectAsMap()
 # print countWords.first()
 # print lp
 # print distFileMap
-print "Only word count pairs"
-print wordCountPairs[u'/home/jatina/Downloads/spark-1.3.1/sampleJava/HelloWorld.java']
 # print "Vocabulary"
 # print vocabulary
 # print type(vocabulary)
 # print "word list"
 # print wordList
-print "wordset"
-print wordSet
-print "vectors"
-tmp = vectors[u'/home/jatina/Downloads/spark-1.3.1/sampleJava/HelloWorld.java']
-print tmp
-vectorLen = len(wordSet)
-for x in range(0, vectorLen):
-	if tmp[x]:
-		print wordSet[x]
-# print vectors	
-matrix = []
-D = len(vectors)
-print D
-for key in vectors:
-	matrix.append(vectors[key])
-
-print matrix	
-transposeMatrix = [list(x) for x in zip(*matrix)]
-print transposeMatrix
-documentFrequenies = []
-for row in transposeMatrix:
-	count = 0
-	for ele in row:
-		if ele:
-			count = count + 1
-	documentFrequenies.append(inverseDocumentFreq(count,D))
-
-print documentFrequenies
-
-tfidfMatrix = []
-
-for row in matrix:
-	newRow = []
-	i=0
-	for ele in row:
-		newRow.append(ele*documentFrequenies[i])
-		i = i+1
-	tfidfMatrix.append(newRow)
-print tfidfMatrix
-print len(tfidfMatrix)		
 # print reserveWords
 # print fileNames
+
+
+# print "Only word count pairs"
+# print wordCountPairs[u'/home/jatina/Downloads/spark-1.3.1/sampleJava/HelloWorld.java']
+# print "wordset"
+# print wordSet
+# print "vectors"
+# tmp = vectors[u'/home/jatina/Downloads/spark-1.3.1/sampleJava/HelloWorld.java']
+# print tmp
+# vectorLen = len(wordSet)
+# for x in range(0, vectorLen):
+# 	if tmp[x]:
+# 		print wordSet[x]
+# # print vectors	
+# matrix = []
+# D = len(vectors)
+# print D
+# for key in vectors:
+# 	matrix.append(vectors[key])
+
+# print matrix	
+# transposeMatrix = [list(x) for x in zip(*matrix)]
+# print transposeMatrix
+# documentFrequenies = []
+# for row in transposeMatrix:
+# 	count = 0
+# 	for ele in row:
+# 		if ele:
+# 			count = count + 1
+# 	documentFrequenies.append(inverseDocumentFreq(count,D))
+
+# print documentFrequenies
+
+# tfidfMatrix = []
+
+# for row in matrix:
+# 	newRow = []
+# 	i=0
+# 	for ele in row:
+# 		newRow.append(ele*documentFrequenies[i])
+# 		i = i+1
+# 	tfidfMatrix.append(newRow)
+# print tfidfMatrix
+# print len(tfidfMatrix)		
