@@ -37,12 +37,14 @@ def removeComment(inp):
 	# out3 = [(key,len(list(group))) for key, group in groupby(out2)]
 	return out2
 
-def wordCount(inp):
-	hashingTF = HashingTF()
+def wordHashCount(inp):
+	hashingTF = HashingTF(V)
 	tf = hashingTF.transform(inp)
-	# out3 = [(key,len(list(group))) for key, group in groupby(inp)]
-	# return out3
 	return tf
+
+def wordHashPair(inp):
+	out3 = [(key,len(list(group))) for key, group in groupby(inp)]
+	return out3	
 
 def tfidfComputation(inp):
 	idf = IDF().fit(inp)
@@ -85,12 +87,16 @@ sc = SparkContext("local", "LSI App")
 distFile = sc.wholeTextFiles("sampleJava").cache()
 distFile.persist()
 withoutComments = distFile.mapValues(removeComment)
+wordHashPairs = withoutComments.flatMapValues(wordHashPair)
+onlyValues = wordHashPairs.values()
+vocab = onlyValues.groupByKey().sortByKey().keys().collect()
+V = len(vocab)
 # distFile.unpersist()
-wordCounts = withoutComments.mapValues(wordCount)
-wordCounts.persist()
-sparseVectors = wordCounts.values()
+wordHashCounts = withoutComments.mapValues(wordHashCount)
+wordHashCounts.persist()
+sparseVectors = wordHashCounts.values()
 sparseVectors.cache()
-sparseVectorsKeys = wordCounts.keys()
+sparseVectorsKeys = wordHashCounts.keys()
 # tfidf = sparseVectors.mapValues(tfidfComputation)
 idf = IDF().fit(sparseVectors)
 tfidf = idf.transform(sparseVectors)
@@ -107,7 +113,7 @@ tfidf = idf.transform(sparseVectors)
 # countLines = distFile.mapValues(removeComments)
 # lp = countWords.lookup('/home/jatina/Downloads/spark-1.3.1/samplePy/parquet_inputformat.py')
 distFileMap = withoutComments.collectAsMap()
-wordCountPairs = wordCounts.collectAsMap()
+wordHashCountPairs = wordHashCounts.collectAsMap()
 
 # idfCollect = idf.collect()
 
@@ -118,12 +124,14 @@ print D
 # for element in tfidfCollection:
 # 	print element
 
-print wordCountPairs
-print idf
+print wordHashCountPairs
+wordHashCounts.unpersist()
 
 # print distFileMap
 # print len(tfidfCollection)
-# onlyValues = wordCounts.values().collect()
+
+print vocab
+print V
 # vocabulary = vocab(onlyValues)
 # vocabularyRDD = sc.parallelize(vocabulary)
 # wordList = vocabularyRDD.keys().collect()
