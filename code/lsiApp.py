@@ -12,7 +12,7 @@ keywords = ['abstract', 'continue', 'for', 'new', 'switch', 'assert', 'default',
    'short', 'try', 'char', 'final', 'interface', 'static', 'void', 'class', 'finally', 'long', 'strictfp', 'volatile',
     'const', 'float', 'native', 'super', 'while', 'true', 'false', 'null']
 
-wordSet = []    
+vocab = []    
 
 def wordCount(s):
 	words = s.split(" ")
@@ -71,10 +71,10 @@ def vocab(inp):
 	return [item for sublist in inp for item in sublist]
 	
 def wordCountVector(inp):
-	out = [0] * len(wordSet)
+	out = [0] * len(vocab)
 	for value in inp:
-		if value[0] in wordSet :
-			out[wordSet.index(value[0])] = value[1]
+		if value[0] in vocab :
+			out[vocab.index(value[0])] = value[1]
 	return out
 
 def inverseDocumentFreq(documentFreq,D):
@@ -88,18 +88,27 @@ distFile = sc.wholeTextFiles("sampleJava").cache()
 distFile.persist()
 withoutComments = distFile.mapValues(removeComment)
 wordHashPairs = withoutComments.flatMapValues(wordHashPair)
+documentCorpus = withoutComments.mapValues(wordHashPair)
+# print wordHashPairs.collect()
 onlyValues = wordHashPairs.values()
+print onlyValues.sortByKey().collect()
 vocab = onlyValues.groupByKey().sortByKey().keys().collect()
+print vocab
 V = len(vocab)
+print V
+print documentCorpus.collect()
+wordCountVectors = documentCorpus.mapValues(wordCountVector)
+vectors = wordCountVectors.collectAsMap()
+print vectors
 # distFile.unpersist()
-wordHashCounts = withoutComments.mapValues(wordHashCount)
-wordHashCounts.persist()
-sparseVectors = wordHashCounts.values()
-sparseVectors.cache()
-sparseVectorsKeys = wordHashCounts.keys()
+# wordHashCounts = withoutComments.mapValues(wordHashCount)
+# wordHashCounts.persist()
+# sparseVectors = wordHashCounts.values()
+# sparseVectors.cache()
+# sparseVectorsKeys = wordHashCounts.keys()
 # tfidf = sparseVectors.mapValues(tfidfComputation)
-idf = IDF().fit(sparseVectors)
-tfidf = idf.transform(sparseVectors)
+# idf = IDF().fit(sparseVectors)
+# tfidf = idf.transform(sparseVectors)
 
 #withoutSpecialChar = withoutComments.mapValues(removeSpecialChar)
 
@@ -112,34 +121,33 @@ tfidf = idf.transform(sparseVectors)
 # countWords = distFile.mapValues(wordCount)
 # countLines = distFile.mapValues(removeComments)
 # lp = countWords.lookup('/home/jatina/Downloads/spark-1.3.1/samplePy/parquet_inputformat.py')
-distFileMap = withoutComments.collectAsMap()
-wordHashCountPairs = wordHashCounts.collectAsMap()
+# distFileMap = withoutComments.collectAsMap()
+# wordHashCountPairs = wordHashCounts.collectAsMap()
 
 # idfCollect = idf.collect()
 
-tfidfCollection = tfidf.collect()
-D = len(tfidfCollection)
-print tfidfCollection
-print D
+# tfidfCollection = tfidf.collect()
+# D = len(tfidfCollection)
+# print tfidfCollection
+# print D
 # for element in tfidfCollection:
 # 	print element
 
-print wordHashCountPairs
-wordHashCounts.unpersist()
+# print wordHashCountPairs
+# wordHashCounts.unpersist()
 
 # print distFileMap
 # print len(tfidfCollection)
 
-print vocab
-print V
+# print vocab
+# print V
 # vocabulary = vocab(onlyValues)
 # vocabularyRDD = sc.parallelize(vocabulary)
 # wordList = vocabularyRDD.keys().collect()
 # wordList.sort()
 # wordSet = list(set(wordList))
 # wordSet.sort()
-# wordCountVectors = wordCounts.mapValues(wordCountVector)
-# vectors = wordCountVectors.collectAsMap()
+
 
 
 # print fileCount
