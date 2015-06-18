@@ -70,14 +70,15 @@ def stemming(inp):
 def vocab(inp):
 	return [item for sublist in inp for item in sublist]
 	
-def wordCountVector(inp):
+def calculateTFIDF(inp):
 	out = [0] * len(vocab)
+	IDF = idf.value
 	for value in inp:
 		if value[0] in vocab :
-			out[vocab.index(value[0])] = value[1]
+			out[vocab.index(value[0])] = value[1]*IDF[value[0]]
 	return out
 
-def inverseDocumentFreq(documentFreq,D):
+def inverseDocumentFreq(documentFreq):
 	temp = (D+1.0)/(documentFreq+1.0)
 	return 	math.log(temp)
 
@@ -88,18 +89,24 @@ distFile = sc.wholeTextFiles("sampleJava").cache()
 distFile.persist()
 withoutComments = distFile.mapValues(removeComment)
 wordHashPairs = withoutComments.flatMapValues(wordHashPair)
-documentCorpus = withoutComments.mapValues(wordHashPair)
+tf = withoutComments.mapValues(wordHashPair)
 # print wordHashPairs.collect()
-onlyValues = wordHashPairs.values()
-print onlyValues.sortByKey().collect()
-vocab = onlyValues.groupByKey().sortByKey().keys().collect()
-print vocab
+wordCountTuplesOnCorpus = wordHashPairs.values()
+docFreq = wordCountTuplesOnCorpus.mapValues(lambda x: x/x).reduceByKey(lambda x,y: x+y)
+D = tf.count()
+inverseDocFreq = docFreq.mapValues(inverseDocumentFreq).sortByKey().collectAsMap()
+idf = sc.broadcast(inverseDocFreq)
+print wordCountTuplesOnCorpus.sortByKey().collect()
+print docFreq.sortByKey().collect()
+print inverseDocFreq
+vocab = wordCountTuplesOnCorpus.groupByKey().sortByKey().keys().collect()
 V = len(vocab)
 print V
-print documentCorpus.collect()
-wordCountVectors = documentCorpus.mapValues(wordCountVector)
-vectors = wordCountVectors.collectAsMap()
-print vectors
+print vocab
+print tf.collect()
+print D
+tfidfVectors = tf.mapValues(calculateTFIDF)
+print tfidfVectors.collectAsMap()
 # distFile.unpersist()
 # wordHashCounts = withoutComments.mapValues(wordHashCount)
 # wordHashCounts.persist()
@@ -141,7 +148,7 @@ print vectors
 
 # print vocab
 # print V
-# vocabulary = vocab(onlyValues)
+# vocabulary = vocab(wordCountTuplesOnCorpus)
 # vocabularyRDD = sc.parallelize(vocabulary)
 # wordList = vocabularyRDD.keys().collect()
 # wordList.sort()
