@@ -14,22 +14,18 @@ keywords = ['abstract', 'continue', 'for', 'new', 'switch', 'assert', 'default',
 
 vocab = []    
 
+#To Count number of wordss in document
 def wordCount(s):
 	words = s.split(" ")
+
 	return len(words)
 
-def removeComments(s): # for removing comments
-	lines = s.splitlines()
-	#for line in lines:
-	return len(lines)
-	
-# def getKeywords():
-# 	return keyword.kwlist
-
+# Method to remove special characters from a given text
 def removeSpecialChar(inp):
 	return re.sub('[^a-zA-Z\n\#]', ' ',inp)
 
-def removeComment(inp):
+# Method to remove all comments from any java program
+def removeComments(inp):
 	tmp = re.sub('(/\*([^*]|[\r\n]|(\*+([^*/]|[\r\n])))*\*+/)|(//.*)', ' ',inp)
 	out1 = removeSpecialChar(tmp)
 	out2 = removeReserveWords(out1, keywords)
@@ -37,21 +33,24 @@ def removeComment(inp):
 	# out3 = [(key,len(list(group))) for key, group in groupby(out2)]
 	return out2
 
+# Method to calculate term frequency in a document using hashing
 def wordHashCount(inp):
 	hashingTF = HashingTF(V)
 	tf = hashingTF.transform(inp)
 	return tf
 
-def wordHashPair(inp):
+# Method to calculate (word, count) pair from a text
+def computeWordCountPairs(inp):
 	out3 = [(key,len(list(group))) for key, group in groupby(inp)]
 	return out3	
 
+# Method to calculate tfidf from term frequencies
 def tfidfComputation(inp):
 	idf = IDF().fit(inp)
 	tfidf = idf.transform(inp)
 	return tfidf
 
-
+# Method to remove java reserve words from a java code
 def removeReserveWords(inp, keyword):
 	output = []
 	words = inp.split()
@@ -60,6 +59,7 @@ def removeReserveWords(inp, keyword):
 			output.append(word)
 	return output
 		
+# Method to apply stemming on each word
 def stemming(inp):
 	output = []
 	for word in inp:
@@ -67,9 +67,11 @@ def stemming(inp):
 		output.append(stemmedWord)
 	return output		
 
+# Method to calculate vocabulary(unique list of words across all documents of corpus) from (word,count) pairs
 def vocab(inp):
 	return [item for sublist in inp for item in sublist]
 	
+# Method to calculate TFIDF using IDF and returning vector representing a document
 def calculateTFIDF(inp):
 	out = [0] * len(vocab)
 	IDF = idf.value
@@ -78,35 +80,64 @@ def calculateTFIDF(inp):
 			out[vocab.index(value[0])] = value[1]*IDF[value[0]]
 	return out
 
+# Method to compute inverse document frequencies using document frequencies
 def inverseDocumentFreq(documentFreq):
 	temp = (D+1.0)/(documentFreq+1.0)
 	return 	math.log(temp)
 
-# reserveWords = getKeywords(); 	
 
+# Constructing spark context object for creating RDD, Broadcast variables and accumulators for application named 'LSI App'
 sc = SparkContext("local", "LSI App")
-distFile = sc.wholeTextFiles("sampleJava").cache()
-distFile.persist()
-withoutComments = distFile.mapValues(removeComment)
-wordHashPairs = withoutComments.flatMapValues(wordHashPair)
-tf = withoutComments.mapValues(wordHashPair)
-# print wordHashPairs.collect()
-wordCountTuplesOnCorpus = wordHashPairs.values()
-docFreq = wordCountTuplesOnCorpus.mapValues(lambda x: x/x).reduceByKey(lambda x,y: x+y)
+
+# Creating RDD named 'distributedFiles' by reading java programs from a directory named 'sampleJava'. This RDD stores data 
+# in (key, value) format where 'key' indicatemes 'documentName' and 'value' indicates 'documentContent'.
+distributedFiles = sc.wholeTextFiles("sampleJava").cache()
+
+# Persisting 'distributedFiles'
+distributedFiles.persist()
+
+# Removing comments from by applying 'removeComments' method on 'fileContent' of each file and returns a transformed RDD 
+# 'codeWithoutComments' with following format ('documentName', 'documentContentWithoutComments')
+codeWithoutComments = distributedFiles.mapValues(removeComments)
+
+# Step to compute all (word, count) pairs across all the documents
+wordCountTuplesOnCorpus = codeWithoutComments.flatMapValues(computeWordCountPairs)
+
+# Step to extract (word,count) pairs from all the documents into 'wordsCountAcrossCorpus'
+wordsCountAcrossCorpus = wordCountTuplesOnCorpus.values()
+
+# Documents frequencies for each word are computed by aggregating same words across all the documents and sotred in 'docFreq'
+docFreq = wordsCountAcrossCorpus.mapValues(lambda x: x/x).reduceByKey(lambda x,y: x+y)
+
+# Step to compute term frequencies for each document and storing it in 'tf' in following format
+# (documentName, list of (word, count) pairs)
+tf = codeWithoutComments.mapValues(computeWordCountPairs)
+
+# 'D' is total number of documents
 D = tf.count()
+
+# A map 'word:inverse_document_frequency' is computed using document frequencies 'docFreq' and 'D'
 inverseDocFreq = docFreq.mapValues(inverseDocumentFreq).sortByKey().collectAsMap()
+
+# 'inverseDocFreq' map is broadcasted across all workers 
 idf = sc.broadcast(inverseDocFreq)
-print wordCountTuplesOnCorpus.sortByKey().collect()
+
+# TFIDF vector is computed for each docuement using 'tf' and 'idf'. And stored in 'tfidfVectors'
+tfidfVectors = tf.mapValues(calculateTFIDF)
+
+
+# Collecting and printing results at different stages
+print wordsCountAcrossCorpus.sortByKey().collect()
 print docFreq.sortByKey().collect()
 print inverseDocFreq
-vocab = wordCountTuplesOnCorpus.groupByKey().sortByKey().keys().collect()
+vocab =wordsCountAcrossCorpus.groupByKey().sortByKey().keys().collect()
 V = len(vocab)
 print V
 print vocab
 print tf.collect()
 print D
-tfidfVectors = tf.mapValues(calculateTFIDF)
 print tfidfVectors.collectAsMap()
+
 # distFile.unpersist()
 # wordHashCounts = withoutComments.mapValues(wordHashCount)
 # wordHashCounts.persist()
