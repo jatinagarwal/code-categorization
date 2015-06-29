@@ -2,9 +2,16 @@
 import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
 import org.apache.spark.SparkConf
+
+import org.apache.spark.mllib.linalg._
+import org.apache.spark.mllib.linalg.{Vector, Vectors}
+import org.apache.spark.mllib.linalg.distributed.RowMatrix
+
 import scala.util.matching.Regex
 import scala.collection.mutable.ListBuffer
 import scala.collection.immutable.Map
+import scala.collection.mutable.ArrayBuffer
+
 
 
 object LsaApp {
@@ -48,19 +55,45 @@ object LsaApp {
 
     val documentFrequencies = words.flatMapValues{inp =>
       inp.groupBy(x => x).mapValues(_.size)  
-    }.values.mapValues{ inp => inp/inp}.reduceByKey((x,y) => x+y).sortByKey()
+    }.values.mapValues{ inp => 1}.reduceByKey((x,y) => x+y).sortByKey()
 
-    val docFreqs = documentFrequencies.collect().sortBy(- _._2).take(numTerms)
+    // val docFreqs = documentFrequencies.collect().sortBy(- _._2)
+    val docFreqs = documentFrequencies.collect()
+
     val numDocs = words.count()
 
     val idfs = inverseDocumentFrequencies(docFreqs, numDocs)
+    val bidfs = sc.broadcast(idfs.toMap)
 
-    val vocabulary = documentFrequencies.keys
+    val vocabulary = documentFrequencies.keys.collect()
+    val termList = sc.broadcast(vocabulary)
 
     val termDocumentFrequencies = words.mapValues{inp =>
       inp.groupBy(x => x).mapValues(_.size)
     } 
 
+    /* Computing tfidf from term frequencies and Inverse document frequencies */
+    val tfidf = termDocumentFrequencies.mapValues{inp =>
+      // val totalTermsInAllDocument = termList.value
+      val idf = bidfs.value
+      val termInThisDocument = inp.keySet.toList
+      val identifiers = termList.value
+      val sizeOfVector = identifiers.size
+      var tfidfMap:Map[Int,Double] = Map()
+      for(term <- termInThisDocument) {
+        tfidfMap += (identifiers.indexOf(term) -> inp(term)*idf(term))
+      }
+      val tfidfSeq = tfidfMap.toSeq
+      Vectors.sparse(sizeOfVector, tfidfSeq)
+    }
+
+    tfidf.cache()
+
+    val mat = new RowMatrix(tfidf.values)
+
+    val svd = mat.computeSVD(50, computeU=true)
+
+    // val mat = new Row(tfidfMatrix)
     // val count : Int = codeData.collect().count()
     // val numAs = logData.filter(line => line.contains("a")).count()
     // val numBs = logData.filter(line => line.contains("b")).count()
@@ -80,7 +113,11 @@ object LsaApp {
     documentFrequencies.foreach(println)
 
     docFreqs.foreach(println)
-    idfs.foreach(println) 
+    tfidf.values.foreach(println)
+
+    println("**********************************************************SVD computed*********************************************")
+    println("Singular values: " + svd.s)
+
   }
 
   def inverseDocumentFrequencies(docFreqs: Array[(String, Int)], numDocs: Long)
