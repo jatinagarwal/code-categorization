@@ -21,15 +21,19 @@ object LsaApp {
     /* 'k' is dimensionanlity of the term-documentt matrix which should be
     passed at command line if not passed then by default it is set to 100 */
 
-    val numTopTerms = if (args.length > 1) args(1).toInt else 50000
+    val numTopConcepts = if (args.length > 1) args(1).toInt else 10
+    /* 'numTopConcepts' is the number of top concepts
+    If not passed then by default it is set to 10 */
+
+    val numTopTerms = if (args.length > 2) args(2).toInt else 10
     /* 'numTopTerms' is the number of top terms in a concept
-    If not passed as a second arguments then by default it is set to 50000 */
+    If not passed then by default it is set to 10 */
 
-    val numTopDocs = if (args.length > 2) args(2).toInt else 50000
+    val numTopDocs = if (args.length > 3) args(3).toInt else 10
     /* 'numTopDocs' is the number of top docs in a concept
-    If not passed as a second arguments then by default it is set to 50000 */
+    If not passed then by default it is set to 10 */
 
-    val dataFiles = if (args.length > 3) args(3).toString else "sampleJava"
+    val dataFiles = if (args.length > 4) args(4).toString else "Data/sampleJava"
     /* 'dataFiles' implies path of the directory where data resides */
   /******************************************** INITIALIZATION STARTS HERE********************************************/
     /* 'keywords' is list of all reserve words in java programming language*/
@@ -40,7 +44,7 @@ object LsaApp {
     "strictfp", "volatile",	"const", "float", "native", "super", "while", "true", "false", "null", "String", "java",
     "util", "ArrayList", "println", "Arrays", "System", "File", "main")
 
-    val conf = new SparkConf().setAppName("Lsa Application").set("spark.executor.memory", "6g")/* Spark Coonfiguration
+    val conf = new SparkConf().setAppName("Lsa Application").set("spark.executor.memory", "7g")/* Spark Coonfiguration
      object in order to perform configuration settings. 'Lsa Application' is name of application*/
     val sc = new SparkContext(conf)/* 'sc' is spark context object to perform all spark related 
     operations with configuration setting from 'conf' */
@@ -58,13 +62,13 @@ object LsaApp {
   /**********************************************DATA PARSING STARTS HERE**********************************************/
     /* In this step, data is cleaned by removing all comments and special characters from each '.java' file*/
     val codeDataWithOutComments = codeData.mapValues{fileContent =>
-    	val regexForComments = """(/\*([^*]|[\r\n]|(\*+([^*/]|[\r\n])))*\*+/)|(//.*)""".r /* 'regexForComments' represents
-    	a pattern for all types of comments in java program  */
+    	// val regexForComments = """(/\*([^*]|[\r\n]|(\*+([^*/]|[\r\n])))*\*+/)|(//.*)""".r 
+     //  /* 'regexForComments' represent	a pattern for all types of comments in java program  */
       val regexSpecialChars = """[^a-zA-Z\n\s]""".r/* 'regexSpecialchars' represents a pattern for special characters*/
-    	val commentsRemoved = regexForComments.replaceAllIn(fileContent,"")/* 'inp' represents content of a'.java' file
-    	 and all occurences of 'regexForComments' is replaced by "", using 'replaceAllIn' method of scala's regex utility
-    	 and store the result in variable named 'commentsRemoved'*/
-    	regexSpecialChars.replaceAllIn(commentsRemoved, " ")/* 'commentsRemoved' represents content of a'.java' file
+    	// val commentsRemoved = regexForComments.replaceAllIn(fileContent,"")
+      /* 'inp' represents content of a'.java' file and all occurences of 'regexForComments' is replaced by "", using 
+      'replaceAllIn' method of scala's regex utility and store the result in variable named 'commentsRemoved'*/
+    	regexSpecialChars.replaceAllIn(fileContent, " ")/* 'commentsRemoved' represents content of a'.java' file
     	without any comments and all occurences of 'regexSpecialChars' are replaced by " ", using 'replaceAllIn' method
     	of scala's regex utility */
     }	
@@ -179,9 +183,9 @@ object LsaApp {
     val svd = mat.computeSVD(k, computeU=true)
 /**********************************************SVD COMPUTATION ENDS HERE***********************************************/
     /* Extracts top terms from top most concepts */
-    val topConceptTerms = topTermsInTopConcepts(svd, 25, numTopTerms, termIds)
+    val topConceptTerms = topTermsInTopConcepts(svd, numTopConcepts, numTopTerms, termIds)
     /* Extracts top documents from top most concepts */
-    val topConceptDocs = topDocsInTopConcepts(svd, 25, numTopDocs, docIds)
+    val topConceptDocs = topDocsInTopConcepts(svd, numTopConcepts, numTopDocs, docIds)
     
 /*******************************************CONSOLE PRINTING STARTS HERE***********************************************/
     println("********************************Number of Documents: " +numDocs +" **************************************")
