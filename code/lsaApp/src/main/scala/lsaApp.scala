@@ -44,15 +44,15 @@ object LsaApp {
     "strictfp", "volatile",	"const", "float", "native", "super", "while", "true", "false", "null", "String", "java",
     "util", "ArrayList", "println", "Arrays", "System", "File", "main")
 
-    val conf = new SparkConf().setAppName("Lsa Application").set("spark.executor.memory", "7g")/* Spark Coonfiguration
+    val conf = new SparkConf().setAppName("Lsa Application").set("spark.executor.memory", "10g")/* Spark Coonfiguration
      object in order to perform configuration settings. 'Lsa Application' is name of application*/
     val sc = new SparkContext(conf)/* 'sc' is spark context object to perform all spark related 
     operations with configuration setting from 'conf' */
-    val codeData = sc.wholeTextFiles(dataFiles)/* 'codeData' is a RDD representing tuples of form 
+    val codeData = sc.wholeTextFiles(dataFiles,10)/* 'codeData' is a RDD representing tuples of form 
     (fileName, fileContent) where 'fileContent' is content in a file named 'fileName'. Here both 'fileName' 
      and 'fileContent are strings. 'codeData' is cached to avoid memoery overhead */
-    codeData.persist(StorageLevel.MEMORY_AND_DISK_SER)/* codeData is persisted in order to perform operation in future*/
-    codeData.count() /* To get count of RDD */
+    //codeData.persist(StorageLevel.MEMORY_AND_DISK_SER)/* codeData is persisted in order to perform operation in future*/
+    //odeData.count() /* To get count of RDD */
     val reserveWords = sc.broadcast(keywords) /* Broadcasting reserve words to be used during data parsing*/
   /********************************************** INITIALIZATION ENDS HERE*********************************************/
 
@@ -74,8 +74,8 @@ object LsaApp {
     }	
 
     // codeData.unpersist() /* Here 'codeData' RDD is unpersited because it is not needed*/
-    codeDataWithOutComments.persist(StorageLevel.MEMORY_AND_DISK_SER)
-    codeDataWithOutComments.count()
+    // codeDataWithOutComments.persist(StorageLevel.MEMORY_AND_DISK_SER)
+    // codeDataWithOutComments.count()
     /* Java reserve words are broadcasted to all nodes of a cluster */    
 
     /* In step this cleaned text is splitted into list of words. And reserved words are removed from the list of words*/
@@ -94,8 +94,8 @@ object LsaApp {
 
     /* Unpersisting 'codeDataWithOutComments and persisting 'words'  */
     // codeDataWithOutComments.unpersist()
-    identifiersForEachDocument.persist(StorageLevel.MEMORY_AND_DISK_SER)
-    identifiersForEachDocument.count()
+    // identifiersForEachDocument.persist(StorageLevel.MEMORY_AND_DISK_SER)
+    // identifiersForEachDocument.count()
   /*************************************************DATA PARSING ENDS HERE*********************************************/
 
 
@@ -107,8 +107,8 @@ object LsaApp {
       to obtain (identifier,count) pairs */
     } 
      // identifiersForEachDocument.unpersist()
-    termDocumentFrequencies.persist()
-    termDocumentFrequencies.count()
+    termDocumentFrequencies.persist(StorageLevel.MEMORY_AND_DISK)
+    // termDocumentFrequencies.count()
 
     val docIds = termDocumentFrequencies.map(_._1).zipWithUniqueId().map(_.swap).collectAsMap().toMap
     /* Documents names are associated to unique ids */
@@ -131,6 +131,7 @@ object LsaApp {
     val numDocs = identifiersForEachDocument.count() /*Computing number of documents*/
     val docFreqs = documentFrequencies.filter{ case(identifier,count) => count >1 && count <= numDocs/2}/* Filtering
     (identifier, df) pairs from 'documentFrequencies' based on optimization specified in paper*/
+    docFreqs.persist(StorageLevel.MEMORY_AND_DISK)
     val idfs = inverseDocumentFrequencies(docFreqs.collect(), numDocs)/* Computing inverse document frequencies 'idfs'
     from document frequencies */
     val bidfs = sc.broadcast(idfs.toMap)/* Broadcasting 'idfs' across nodes of cluster*/   
@@ -164,10 +165,11 @@ object LsaApp {
 
     // termDocumentFrequencies.unpersist()
     //tfidf.cache()
-    tfidf.persist(StorageLevel.MEMORY_AND_DISK_SER) /* Pesisting tfidf vectors into memory */
-    tfidf.count()
+    // tfidf.persist(StorageLevel.MEMORY_AND_DISK_SER)  Pesisting tfidf vectors into memory 
+    // tfidf.count()
 /**********************************************TFIDF COMPUTATION ENDS HERE*********************************************/
-
+  tfidf.persist(StorageLevel.MEMORY_AND_DISK)
+  tfidf.count()
 
 
 /**********************************************SVD COMPUTATION STARTS HERE*********************************************/
@@ -176,7 +178,8 @@ object LsaApp {
 
     val m = mat.numRows /* Number of rows in a matrix */
     val n = mat.numCols /* Number of columns in a matrix */
-
+    termDocumentFrequencies.unpersist()
+    docFreqs.unpersist()
     // tfidf.unpersist()
 
     /* Computing svd from the 'mat' to obtain matrices*/
@@ -189,7 +192,7 @@ object LsaApp {
     
 /*******************************************CONSOLE PRINTING STARTS HERE***********************************************/
     println("********************************Number of Documents: " +numDocs +" **************************************")
-    println("***********************************Total terms ***************************: "+ documentFrequencies.count())
+    // println("***********************************Total terms ***************************: "+ documentFrequencies.count())
     println("****************************Number of Terms after filtering: " +vocabulary.size+" ***********************")
     println("*************************************** LIST OF WORDS ***************************************************")
 //    identifiersForEachDocument.take(2).foreach(println)
