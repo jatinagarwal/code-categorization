@@ -22,16 +22,13 @@ object LsaApp {
     passed at command line if not passed then by default it is set to 100 */
 
     val numTopConcepts = if (args.length > 1) args(1).toInt else 10
-    /* 'numTopConcepts' is the number of top concepts
-    If not passed then by default it is set to 10 */
+    /* 'numTopConcepts' is the number of top concepts. If not passed then by default it is set to 10 */
 
     val numTopTerms = if (args.length > 2) args(2).toInt else 10
-    /* 'numTopTerms' is the number of top terms in a concept
-    If not passed then by default it is set to 10 */
+    /* 'numTopTerms' is the number of top terms in a concept. If not passed then by default it is set to 10 */
 
     val numTopDocs = if (args.length > 3) args(3).toInt else 10
-    /* 'numTopDocs' is the number of top docs in a concept
-    If not passed then by default it is set to 10 */
+    /* 'numTopDocs' is the number of top docs in a concept. If not passed then by default it is set to 10 */
 
     val dataFiles = if (args.length > 4) args(4).toString else "Data/sampleJava"
     /* 'dataFiles' implies path of the directory where data resides */
@@ -51,8 +48,6 @@ object LsaApp {
     val codeData = sc.wholeTextFiles(dataFiles,10)/* 'codeData' is a RDD representing tuples of form 
     (fileName, fileContent) where 'fileContent' is content in a file named 'fileName'. Here both 'fileName' 
      and 'fileContent are strings. 'codeData' is cached to avoid memoery overhead */
-    //codeData.persist(StorageLevel.MEMORY_AND_DISK_SER)/* codeData is persisted in order to perform operation in future*/
-    //odeData.count() /* To get count of RDD */
     val reserveWords = sc.broadcast(keywords) /* Broadcasting reserve words to be used during data parsing*/
   /********************************************** INITIALIZATION ENDS HERE*********************************************/
 
@@ -73,10 +68,6 @@ object LsaApp {
     	of scala's regex utility */
     }	
 
-    // codeData.unpersist() /* Here 'codeData' RDD is unpersited because it is not needed*/
-    // codeDataWithOutComments.persist(StorageLevel.MEMORY_AND_DISK_SER)
-    // codeDataWithOutComments.count()
-    /* Java reserve words are broadcasted to all nodes of a cluster */    
 
     /* In step this cleaned text is splitted into list of words. And reserved words are removed from the list of words*/
     val identifiersForEachDocument = codeDataWithOutComments.mapValues{inp =>      
@@ -91,11 +82,6 @@ object LsaApp {
       '.java'*/
       bagOfWords
     }
-
-    /* Unpersisting 'codeDataWithOutComments and persisting 'words'  */
-    // codeDataWithOutComments.unpersist()
-    // identifiersForEachDocument.persist(StorageLevel.MEMORY_AND_DISK_SER)
-    // identifiersForEachDocument.count()
   /*************************************************DATA PARSING ENDS HERE*********************************************/
 
 
@@ -106,9 +92,8 @@ object LsaApp {
       inp.groupBy(x => x).mapValues(_.size)/* Grouping based on uniqueness and computing size of each group
       to obtain (identifier,count) pairs */
     } 
-     // identifiersForEachDocument.unpersist()
-    termDocumentFrequencies.persist(StorageLevel.MEMORY_AND_DISK)
-    // termDocumentFrequencies.count()
+    termDocumentFrequencies.persist(StorageLevel.MEMORY_AND_DISK) /* RDD 'termDocumentFrequencies' is persisted in the
+    memory as two or more transformation are performed on it*/
 
     val docIds = termDocumentFrequencies.map(_._1).zipWithUniqueId().map(_.swap).collectAsMap().toMap
     /* Documents names are associated to unique ids */
@@ -124,14 +109,14 @@ object LsaApp {
      identifier across all the documents*/
     val documentFrequencies = termDocumentFrequencies.flatMapValues(inp => 
       inp).values.mapValues{inp => 1}.reduceByKey((x,y) => x+y).sortByKey() 
-    /* Calculating document frequencies for all the terms across
-    all the documents*/
+    /* In above step document frequencies are calculated for the terms across all the documents*/
   
     // val docFreqs = documentFrequencies.collect().sortBy(- _._2)
     val numDocs = identifiersForEachDocument.count() /*Computing number of documents*/
     val docFreqs = documentFrequencies.filter{ case(identifier,count) => count >1 && count <= numDocs/2}/* Filtering
     (identifier, df) pairs from 'documentFrequencies' based on optimization specified in paper*/
-    docFreqs.persist(StorageLevel.MEMORY_AND_DISK)
+    docFreqs.persist(StorageLevel.MEMORY_AND_DISK)/* RDD 'docFreqs' is persisted in the memory as two or more 
+    transformation are performed on it*/
     val idfs = inverseDocumentFrequencies(docFreqs.collect(), numDocs)/* Computing inverse document frequencies 'idfs'
     from document frequencies */
     val bidfs = sc.broadcast(idfs.toMap)/* Broadcasting 'idfs' across nodes of cluster*/   
@@ -162,14 +147,12 @@ object LsaApp {
       val tfidfSeq = tfidfMap.toSeq/* Converting 'tfidfMap' map to a sequence */
       Vectors.sparse(sizeOfVector, tfidfSeq) /*Obtaining sparse vector from 'tfidfSeq' sequence and 'sizeOfVector'*/
     }
-
-    // termDocumentFrequencies.unpersist()
-    //tfidf.cache()
-    // tfidf.persist(StorageLevel.MEMORY_AND_DISK_SER)  Pesisting tfidf vectors into memory 
-    // tfidf.count()
+    tfidf.persist(StorageLevel.MEMORY_AND_DISK)/* RDD 'tfidf' is persisted in the memory as two or more 
+    operations are performed while computing row matrix*/
+    tfidf.count() /* Action is performed on tfidf vector in order to evaluate tfidf as it is needed in next step */
+   
 /**********************************************TFIDF COMPUTATION ENDS HERE*********************************************/
-  tfidf.persist(StorageLevel.MEMORY_AND_DISK)
-  tfidf.count()
+  
 
 
 /**********************************************SVD COMPUTATION STARTS HERE*********************************************/
@@ -180,7 +163,6 @@ object LsaApp {
     val n = mat.numCols /* Number of columns in a matrix */
     termDocumentFrequencies.unpersist()
     docFreqs.unpersist()
-    // tfidf.unpersist()
 
     /* Computing svd from the 'mat' to obtain matrices*/
     val svd = mat.computeSVD(k, computeU=true)
