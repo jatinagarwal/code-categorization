@@ -1,4 +1,7 @@
 /* SimpleApp.scala */
+package com.lsa.app
+import com.lsa.app.ZipBasicParser
+import com.lsa.app.JavaCommentsRemover
 import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
 import org.apache.spark.SparkConf
@@ -8,11 +11,16 @@ import org.apache.spark._
 import org.apache.spark.mllib.linalg.{Matrix, SingularValueDecomposition, Vectors}
 import org.apache.spark.mllib.linalg.distributed.RowMatrix
 
+import java.util.zip.ZipInputStream
+import java.io.Reader;
+import java.io.Writer;
+import java.io.StringReader;
+import java.io.StringWriter;
+
 import scala.util.matching.Regex
 import scala.collection.mutable.ListBuffer
 import scala.collection.immutable.Map
 import scala.collection.mutable.ArrayBuffer
-
 
 
 object LsaApp {
@@ -45,18 +53,37 @@ object LsaApp {
      object in order to perform configuration settings. 'Lsa Application' is name of application*/
     val sc = new SparkContext(conf)/* 'sc' is spark context object to perform all spark related 
     operations with configuration setting from 'conf' */
-    val codeData = sc.wholeTextFiles(dataFiles,10)/* 'codeData' is a RDD representing tuples of form 
+    val codeData = sc.binaryFiles(dataFiles)/* 'codeData' is a RDD representing tuples of form 
     (fileName, fileContent) where 'fileContent' is content in a file named 'fileName'. Here both 'fileName' 
      and 'fileContent are strings. 'codeData' is cached to avoid memoery overhead */
     val reserveWords = sc.broadcast(keywords) /* Broadcasting reserve words to be used during data parsing*/
   /********************************************** INITIALIZATION ENDS HERE*********************************************/
 
 
+  /*******************************************************************************************************************/
+  val zipStreamToText = codeData.mapValues{zipStream =>
+    val zipInputStream = zipStream.open()
+    val fileContent = ZipBasicParser.readFilesAndPackages(new ZipInputStream(zipInputStream))
+    zipInputStream.close()
+    fileContent
+  }
+
+
+  val commentsRemoved = zipStreamToText.mapValues{fileContent =>
+    val reader:Reader = new StringReader(fileContent);
+    val writer: StringWriter = new StringWriter(fileContent.length());
+    val jcr: JavaCommentsRemover = new JavaCommentsRemover(reader,writer);
+    val codeWithOutComments = jcr.process();
+    codeWithOutComments
+  }
+  /*******************************************************************************************************************/
+
+
 
 
   /**********************************************DATA PARSING STARTS HERE**********************************************/
     /* In this step, data is cleaned by removing all comments and special characters from each '.java' file*/
-    val codeDataWithOutComments = codeData.mapValues{fileContent =>
+    val codeDataWithOutComments = commentsRemoved.mapValues{fileContent =>
     	// val regexForComments = """(/\*([^*]|[\r\n]|(\*+([^*/]|[\r\n])))*\*+/)|(//.*)""".r 
      //  /* 'regexForComments' represent	a pattern for all types of comments in java program  */
       val regexSpecialChars = """[^a-zA-Z\n\s]""".r/* 'regexSpecialchars' represents a pattern for special characters*/
@@ -70,7 +97,7 @@ object LsaApp {
 
 
     /* In step this cleaned text is splitted into list of words. And reserved words are removed from the list of words*/
-    val identifiersForEachDocument = codeDataWithOutComments.mapValues{inp =>      
+    val identifiersForEachDocument = codeDataWithOutComments.mapValues{inp =>
       val listOfWords = inp.split("\\s+").toList.filter(x => x != "") /* Text 'inp' is splitted into list of words and
       stored in listOfWords'*/
       val allReserveWords = reserveWords.value /* Broadcasted listed of reserve words are accessed and stored in
@@ -92,8 +119,8 @@ object LsaApp {
       inp.groupBy(x => x).mapValues(_.size)/* Grouping based on uniqueness and computing size of each group
       to obtain (identifier,count) pairs */
     } 
-    termDocumentFrequencies.persist(StorageLevel.MEMORY_AND_DISK) /* RDD 'termDocumentFrequencies' is persisted in the
-    memory as two or more transformation are performed on it*/
+    termDocumentFrequencies.persist(StorageLevel.MEMORY_AND_DISK)
+   /* RDD 'termDocumentFrequencies' is persisted in the memory as two or more transformation are performed on it*/
 
     val docIds = termDocumentFrequencies.map(_._1).zipWithUniqueId().map(_.swap).collectAsMap().toMap
     /* Documents names are associated to unique ids */
@@ -113,12 +140,12 @@ object LsaApp {
   
     // val docFreqs = documentFrequencies.collect().sortBy(- _._2)
     val numDocs = identifiersForEachDocument.count() /*Computing number of documents*/
-    val docFreqs = documentFrequencies.filter{ case(identifier,count) => count >1 && count <= numDocs/2}/* Filtering
-    (identifier, df) pairs from 'documentFrequencies' based on optimization specified in paper*/
-    docFreqs.persist(StorageLevel.MEMORY_AND_DISK)/* RDD 'docFreqs' is persisted in the memory as two or more 
-    transformation are performed on it*/
-    val idfs = inverseDocumentFrequencies(docFreqs.collect(), numDocs)/* Computing inverse document frequencies 'idfs'
-    from document frequencies */
+    val docFreqs = documentFrequencies.filter{ case(identifier,count) => count >1 && count <= numDocs/2}
+    /* Filtering (identifier, df) pairs from 'documentFrequencies' based on optimization specified in paper*/
+    docFreqs.persist(StorageLevel.MEMORY_AND_DISK)
+    /* RDD 'docFreqs' is persisted in the memory as two or more transformation are performed on it*/
+    val idfs = inverseDocumentFrequencies(docFreqs.collect(), numDocs)
+    /* Computing inverse document frequencies 'idfs' from document frequencies */
     val bidfs = sc.broadcast(idfs.toMap)/* Broadcasting 'idfs' across nodes of cluster*/   
     val vocabulary = docFreqs.keys.collect()/* Collecting all the identifiers from filtering (identifier, df) pairs*/
     val termList = sc.broadcast(vocabulary)/* Broadcasting vocabulary across all nodes of clusters*/
@@ -132,13 +159,17 @@ object LsaApp {
     /* Computing tfidf from term frequencies and Inverse document frequencies */
     val tfidf = termDocumentFrequencies.mapValues{termFreqPair =>
       val idf = bidfs.value/* Locally obtaining broadcasted bidfs values */
+      // val start = System.currentTimeMillis() 
       val allIdentifiers = termList.value/* Locally obtaining broadcasted  values */
+      // val end=ystem.currentTimeMillis() 
+      // println("time in seconds  " + (end-start)/1000.0)
       val termInThisDocument = termFreqPair.keySet.toList/* Obtaining all terms from this document*/
       val filteredTerms =  new ListBuffer[String]()
-      for(term <- termInThisDocument if allIdentifiers.contains(term)) filteredTerms+=term /* All relevant documents
-       are filtered  and stored in a 'filteredTerms' */
+      for(term <- termInThisDocument if allIdentifiers.contains(term)) filteredTerms+=term 
+      /* All relevant terms are filtered  and stored in a 'filteredTerms' */
       val filteredTermsOfThisDocument = filteredTerms.toList
       val sizeOfVector = allIdentifiers.size/* Computing number of terms(identifiers) across all the documents*/
+      println("********************************Size of Sparse Vector: " +sizeOfVector +" **************************************")
       var tfidfMap:Map[Int,Double] = Map()/* Computing a map of (identifier, tfidf) pairs from term-document
        (identifier, count) pairs and document-frequency (identifier, idfs) pair */
       for(term <- filteredTermsOfThisDocument) {
