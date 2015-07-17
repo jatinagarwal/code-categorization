@@ -49,7 +49,7 @@ object LsaApp {
     "strictfp", "volatile",	"const", "float", "native", "super", "while", "true", "false", "null", "String", "java",
     "util", "ArrayList", "println", "Arrays", "System", "File", "main")
 
-    val conf = new SparkConf().setAppName("Lsa Application").set("spark.executor.memory", "10g")/* Spark Coonfiguration
+    val conf = new SparkConf().setAppName("Lsa Application").set("spark.executor.memory", "14g")/* Spark Coonfiguration
      object in order to perform configuration settings. 'Lsa Application' is name of application*/
     val sc = new SparkContext(conf)/* 'sc' is spark context object to perform all spark related 
     operations with configuration setting from 'conf' */
@@ -86,7 +86,7 @@ object LsaApp {
     val codeDataWithOutComments = commentsRemoved.mapValues{fileContent =>
     	// val regexForComments = """(/\*([^*]|[\r\n]|(\*+([^*/]|[\r\n])))*\*+/)|(//.*)""".r 
      //  /* 'regexForComments' represent	a pattern for all types of comments in java program  */
-      val regexSpecialChars = """[^a-zA-Z\n\s]""".r/* 'regexSpecialchars' represents a pattern for special characters*/
+      val regexSpecialChars = """[^a-zA-Z\s]""".r/* 'regexSpecialchars' represents a pattern for special characters*/
     	// val commentsRemoved = regexForComments.replaceAllIn(fileContent,"")
       /* 'inp' represents content of a'.java' file and all occurences of 'regexForComments' is replaced by "", using 
       'replaceAllIn' method of scala's regex utility and store the result in variable named 'commentsRemoved'*/
@@ -97,7 +97,7 @@ object LsaApp {
 
 
     /* In step this cleaned text is splitted into list of words. And reserved words are removed from the list of words*/
-    val identifiersForEachDocument = codeDataWithOutComments.mapValues{inp =>
+    val identifiersForEachDocument = codeDataWithOutComments.mapValues{inp =>      
       val listOfWords = inp.split("\\s+").toList.filter(x => x != "") /* Text 'inp' is splitted into list of words and
       stored in listOfWords'*/
       val allReserveWords = reserveWords.value /* Broadcasted listed of reserve words are accessed and stored in
@@ -105,7 +105,7 @@ object LsaApp {
       val removeReserveWords =  new ListBuffer[String]()/* 'removeReserveWords' is list buffer to strings */      
       for(word <- listOfWords if !allReserveWords.contains(word)) removeReserveWords+=word/* words other than reserve
        words are appended to 'removeReserveWords'*/
-      val bagOfWords = removeReserveWords.toList.sorted/* 'bagOfWords' contains sorted list of identifiers from a
+      val bagOfWords:List[String] = removeReserveWords.toList.sorted/* 'bagOfWords' contains sorted list of identifiers from a
       '.java'*/
       bagOfWords
     }
@@ -121,6 +121,7 @@ object LsaApp {
     } 
     termDocumentFrequencies.persist(StorageLevel.MEMORY_AND_DISK)
    /* RDD 'termDocumentFrequencies' is persisted in the memory as two or more transformation are performed on it*/
+    val numDocs = termDocumentFrequencies.count() /*Computing number of documents*/
 
     val docIds = termDocumentFrequencies.map(_._1).zipWithUniqueId().map(_.swap).collectAsMap().toMap
     /* Documents names are associated to unique ids */
@@ -139,7 +140,7 @@ object LsaApp {
     /* In above step document frequencies are calculated for the terms across all the documents*/
   
     // val docFreqs = documentFrequencies.collect().sortBy(- _._2)
-    val numDocs = identifiersForEachDocument.count() /*Computing number of documents*/
+    
     val docFreqs = documentFrequencies.filter{ case(identifier,count) => count >1 && count <= numDocs/2}
     /* Filtering (identifier, df) pairs from 'documentFrequencies' based on optimization specified in paper*/
     docFreqs.persist(StorageLevel.MEMORY_AND_DISK)
@@ -164,15 +165,15 @@ object LsaApp {
       // val end=ystem.currentTimeMillis() 
       // println("time in seconds  " + (end-start)/1000.0)
       val termInThisDocument = termFreqPair.keySet.toList/* Obtaining all terms from this document*/
-      val filteredTerms =  new ListBuffer[String]()
-      for(term <- termInThisDocument if allIdentifiers.contains(term)) filteredTerms+=term 
-      /* All relevant terms are filtered  and stored in a 'filteredTerms' */
-      val filteredTermsOfThisDocument = filteredTerms.toList
+      // val filteredTerms =  new ListBuffer[String]()
+      // for(term <- termInThisDocument if allIdentifiers.contains(term)) filteredTerms+=term 
+      // /* All relevant terms are filtered  and stored in a 'filteredTerms' */
+      // val filteredTermsOfThisDocument = filteredTerms.toList
       val sizeOfVector = allIdentifiers.size/* Computing number of terms(identifiers) across all the documents*/
       println("********************************Size of Sparse Vector: " +sizeOfVector +" **************************************")
       var tfidfMap:Map[Int,Double] = Map()/* Computing a map of (identifier, tfidf) pairs from term-document
        (identifier, count) pairs and document-frequency (identifier, idfs) pair */
-      for(term <- filteredTermsOfThisDocument) {
+      for(term <- termInThisDocument if allIdentifiers.contains(term)) {
         tfidfMap += (allIdentifiers.indexOf(term) -> termFreqPair(term)*idf(term)) /* TFIDF computation */
       }      
       val tfidfSeq = tfidfMap.toSeq/* Converting 'tfidfMap' map to a sequence */
@@ -188,12 +189,13 @@ object LsaApp {
 
 /**********************************************SVD COMPUTATION STARTS HERE*********************************************/
     /* Constructing sparse matrix from tfidf sparse vectors obtained in the previous step*/
+    termDocumentFrequencies.unpersist()
+    docFreqs.unpersist()
     val mat = new RowMatrix(tfidf.values)
 
     val m = mat.numRows /* Number of rows in a matrix */
     val n = mat.numCols /* Number of columns in a matrix */
-    termDocumentFrequencies.unpersist()
-    docFreqs.unpersist()
+    
 
     /* Computing svd from the 'mat' to obtain matrices*/
     val svd = mat.computeSVD(k, computeU=true)
