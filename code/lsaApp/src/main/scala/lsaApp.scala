@@ -11,7 +11,7 @@ import org.apache.spark._
 import org.apache.spark.mllib.linalg.{Matrix, SingularValueDecomposition, Vectors}
 import org.apache.spark.mllib.linalg.distributed.RowMatrix
 
-import java.util.zip.ZipInputStream
+import java.util.zip.ZipInputStream;
 import java.io.Reader;
 import java.io.Writer;
 import java.io.StringReader;
@@ -63,19 +63,20 @@ object LsaApp {
   /*******************************************************************************************************************/
   val zipStreamToText = codeData.mapValues{zipStream =>
     val zipInputStream = zipStream.open()
-    val fileContent = ZipBasicParser.readFilesAndPackages(new ZipInputStream(zipInputStream))
+    val (fileContent,count) = ZipBasicParser.readFilesAndPackages(new ZipInputStream(zipInputStream))
+    println("********************************Number of Exceptions: " +count +" ******************************")
     zipInputStream.close()
     fileContent
   }
 
 
-  val commentsRemoved = zipStreamToText.mapValues{fileContent =>
-    val reader:Reader = new StringReader(fileContent);
-    val writer: StringWriter = new StringWriter(fileContent.length());
-    val jcr: JavaCommentsRemover = new JavaCommentsRemover(reader,writer);
-    val codeWithOutComments = jcr.process();
-    codeWithOutComments
-  }
+  // val commentsRemoved = zipStreamToText.mapValues{fileContent =>
+  //   val reader:Reader = new StringReader(fileContent);
+  //   val writer: StringWriter = new StringWriter(fileContent.length());
+  //   val jcr: JavaCommentsRemover = new JavaCommentsRemover(reader,writer);
+  //   val codeWithOutComments = jcr.process();
+  //   codeWithOutComments   
+  // }
   /*******************************************************************************************************************/
 
 
@@ -83,7 +84,7 @@ object LsaApp {
 
   /**********************************************DATA PARSING STARTS HERE**********************************************/
     /* In this step, data is cleaned by removing all comments and special characters from each '.java' file*/
-    val codeDataWithOutComments = commentsRemoved.mapValues{fileContent =>
+    val codeDataWithOutComments = zipStreamToText.mapValues{fileContent =>
     	// val regexForComments = """(/\*([^*]|[\r\n]|(\*+([^*/]|[\r\n])))*\*+/)|(//.*)""".r 
      //  /* 'regexForComments' represent	a pattern for all types of comments in java program  */
       val regexSpecialChars = """[^a-zA-Z\s]""".r/* 'regexSpecialchars' represents a pattern for special characters*/

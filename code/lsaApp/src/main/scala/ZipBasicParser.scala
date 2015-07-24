@@ -17,8 +17,17 @@
 
 package com.lsa.app
 
+import com.lsa.app.CuPrinter
+
 import java.io.{ByteArrayOutputStream, File}
 import java.util.zip.{ZipEntry, ZipInputStream}
+import java.io.Reader;
+import java.io.IOException;
+import java.io.StringReader;
+import java.lang.Throwable;
+
+import com.github.javaparser.JavaParser
+import com.github.javaparser.ast.CompilationUnit
 
 import org.apache.commons.io.IOUtils
 import org.slf4j.LoggerFactory
@@ -27,9 +36,10 @@ import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.mutable.StringBuilder
 import scala.util.Try
+import scala.util.control.ControlThrowable
 
 /**
- * Extracts java files and packages from the given zip file.
+ * Extracts and merges java files from the given zip file. Also removes comment from java files
  */
 
  trait Logger {
@@ -41,22 +51,32 @@ object ZipBasicParser extends Logger {
 
   private val bufferSize = 1024000 // about 1 mb
 
-  def readFilesAndPackages(zipStream: ZipInputStream): (String) = {
+  def readFilesAndPackages(zipStream: ZipInputStream) : (String,Int) = {
     val fileContent = new StringBuilder
-    var ze: Option[ZipEntry] = None
+    var count = 0
+    var ze: Option[ZipEntry] = None   
     try {
       do {
         ze = Option(zipStream.getNextEntry)
         ze.foreach { ze => if (ze.getName.endsWith("java") && !ze.isDirectory) {
           val fileName = ze.getName
-          fileContent.append(readContent(zipStream))
+          val in:Reader = new StringReader(readContent(zipStream))
+          try {
+            val cu = JavaParser.parse(in, false)
+            fileContent.append(cu.toString())
+          }
+          catch {
+            case t: Throwable => log.error("Lexical error in next entry", t) // log and suppress 
+            count = count + 1 
+            fileContent.append("") 
+          }  
         } 
         }
       } while (ze.isDefined)
     } catch {
       case ex: Exception => log.error("Exception reading next entry {}", ex)
     }
-    (fileContent.toString)
+    (fileContent.toString,count)
   }
 
   def readContent(stream: ZipInputStream): String = {
