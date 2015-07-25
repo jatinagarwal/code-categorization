@@ -61,12 +61,13 @@ object LsaApp {
 
 
   /*******************************************************************************************************************/
-  val zipStreamToText = codeData.mapValues{zipStream =>
-    val zipInputStream = zipStream.open()
-    val (fileContent,count) = ZipBasicParser.readFilesAndPackages(new ZipInputStream(zipInputStream))
-    println("********************************Number of Exceptions: " +count +" ******************************")
-    zipInputStream.close()
-    fileContent
+  val zipStreamToText = codeData.map{
+    case(fileName, zipStream) =>
+      val zipInputStream = zipStream.open()
+      val (fileContent,count) = ZipBasicParser.readFilesAndPackages(new ZipInputStream(zipInputStream))
+      println(fileName +":"+count)
+      zipInputStream.close()
+      (fileName,fileContent)
   }
 
 
@@ -150,7 +151,8 @@ object LsaApp {
     /* Computing inverse document frequencies 'idfs' from document frequencies */
     val bidfs = sc.broadcast(idfs.toMap)/* Broadcasting 'idfs' across nodes of cluster*/   
     val vocabulary = docFreqs.keys.collect()/* Collecting all the identifiers from filtering (identifier, df) pairs*/
-    val termList = sc.broadcast(vocabulary)/* Broadcasting vocabulary across all nodes of clusters*/
+    val tl = vocabulary.zipWithIndex.toMap
+    val termList = sc.broadcast(tl)/* Broadcasting vocabulary across all nodes of clusters*/
     val termIds = vocabulary.zipWithIndex.map(_.swap).toMap /* Terms are associated with the ids as shown (id, term) */
 /*******************************************DOCUMENT FREQUENCIES ENDS HERE*********************************************/
 
@@ -171,11 +173,10 @@ object LsaApp {
       // /* All relevant terms are filtered  and stored in a 'filteredTerms' */
       // val filteredTermsOfThisDocument = filteredTerms.toList
       val sizeOfVector = allIdentifiers.size/* Computing number of terms(identifiers) across all the documents*/
-      println("********************************Size of Sparse Vector: " +sizeOfVector +" **************************************")
       var tfidfMap:Map[Int,Double] = Map()/* Computing a map of (identifier, tfidf) pairs from term-document
        (identifier, count) pairs and document-frequency (identifier, idfs) pair */
       for(term <- termInThisDocument if allIdentifiers.contains(term)) {
-        tfidfMap += (allIdentifiers.indexOf(term) -> termFreqPair(term)*idf(term)) /* TFIDF computation */
+        tfidfMap += (allIdentifiers(term) -> termFreqPair(term)*idf(term)) /* TFIDF computation */
       }      
       val tfidfSeq = tfidfMap.toSeq/* Converting 'tfidfMap' map to a sequence */
       Vectors.sparse(sizeOfVector, tfidfSeq) /*Obtaining sparse vector from 'tfidfSeq' sequence and 'sizeOfVector'*/
