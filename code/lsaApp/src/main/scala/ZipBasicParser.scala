@@ -69,7 +69,8 @@ object ZipBasicParser extends Logger {
             case t: Throwable => log.error("Lexical error in next entry", t) // log and suppress 
             count = count + 1 
             fileContent.append("") 
-          }  
+          }
+          in.close() 
         } 
         }
       } while (ze.isDefined)

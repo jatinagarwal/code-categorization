@@ -10,6 +10,7 @@ import org.apache.spark.storage.StorageLevel
 import org.apache.spark._
 import org.apache.spark.mllib.linalg.{Matrix, SingularValueDecomposition, Vectors}
 import org.apache.spark.mllib.linalg.distributed.RowMatrix
+import org.apache.spark.rdd.RDD
 
 import java.util.zip.ZipInputStream;
 import java.io.Reader;
@@ -53,7 +54,7 @@ object LsaApp {
      object in order to perform configuration settings. 'Lsa Application' is name of application*/
     val sc = new SparkContext(conf)/* 'sc' is spark context object to perform all spark related 
     operations with configuration setting from 'conf' */
-    val codeData = sc.binaryFiles(dataFiles)/* 'codeData' is a RDD representing tuples of form 
+    val codeData = sc.binaryFiles(dataFiles).cache()/* 'codeData' is a RDD representing tuples of form 
     (fileName, fileContent) where 'fileContent' is content in a file named 'fileName'. Here both 'fileName' 
      and 'fileContent are strings. 'codeData' is cached to avoid memoery overhead */
     val reserveWords = sc.broadcast(keywords) /* Broadcasting reserve words to be used during data parsing*/
@@ -147,9 +148,9 @@ object LsaApp {
     /* Filtering (identifier, df) pairs from 'documentFrequencies' based on optimization specified in paper*/
     docFreqs.persist(StorageLevel.MEMORY_AND_DISK)
     /* RDD 'docFreqs' is persisted in the memory as two or more transformation are performed on it*/
-    val idfs = inverseDocumentFrequencies(docFreqs.collect(), numDocs)
+    val idfs = inverseDocumentFrequencies(docFreqs, numDocs)
     /* Computing inverse document frequencies 'idfs' from document frequencies */
-    val bidfs = sc.broadcast(idfs.toMap)/* Broadcasting 'idfs' across nodes of cluster*/   
+    val bidfs = sc.broadcast(idfs.collectAsMap())/* Broadcasting 'idfs' across nodes of cluster*/   
     val vocabulary = docFreqs.keys.collect()/* Collecting all the identifiers from filtering (identifier, df) pairs*/
     val tl = vocabulary.zipWithIndex.toMap
     val termList = sc.broadcast(tl)/* Broadcasting vocabulary across all nodes of clusters*/
@@ -250,9 +251,9 @@ object LsaApp {
 
   }
   /* FUNCTION TO COMPUTE INVERSE DCOUMENT FREQUENCIES*/
-  def inverseDocumentFrequencies(docFreqs: Array[(String, Int)], numDocs: Long)
-    : Map[String, Double] = {
-    docFreqs.map{ case (term, count) => (term, math.log(numDocs.toDouble / count))}.toMap
+  def inverseDocumentFrequencies(docFreqs: RDD[(String, Int)], numDocs: Long)
+    : RDD[(String, Double)] = {
+    docFreqs.map{ case (term, count) => (term, math.log(numDocs.toDouble / count))}
   }
 
   /* FUNCTION TO COMPUTE TOP TERMS IN TOP CONCEPTS*/
