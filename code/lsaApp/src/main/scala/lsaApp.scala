@@ -8,7 +8,7 @@ import org.apache.spark.SparkConf
 import org.apache.spark.storage.StorageLevel
 
 import org.apache.spark._
-import org.apache.spark.mllib.linalg.{Matrix, SingularValueDecomposition, Vectors}
+import org.apache.spark.mllib.linalg.{Matrix, SingularValueDecomposition, Vectors, Matrices, Vector}
 import org.apache.spark.mllib.linalg.distributed.RowMatrix
 import org.apache.spark.rdd.RDD
 
@@ -22,6 +22,7 @@ import scala.util.matching.Regex
 import scala.collection.mutable.ListBuffer
 import scala.collection.immutable.Map
 import scala.collection.mutable.ArrayBuffer
+import scala.io.Source
 
 
 object LsaApp {
@@ -67,13 +68,15 @@ object LsaApp {
 
 
   /*******************************************************************************************************************/
+  val regexToRemovePath = """.*\/""".r
   val zipStreamToText = codeData.map{
     case(fileName, zipStream) =>
       val zipInputStream = zipStream.open()
       val (fileContent,count) = ZipBasicParser.readFilesAndPackages(new ZipInputStream(zipInputStream))
       println(fileName +":"+count)
       zipInputStream.close()
-      (fileName,fileContent)
+      val repoName = regexToRemovePath.replaceAllIn(fileName,"")
+      (repoName,fileContent)
   }
 
 
@@ -131,7 +134,8 @@ object LsaApp {
    /* RDD 'termDocumentFrequencies' is persisted in the memory as two or more transformation are performed on it*/
     val numDocs = termDocumentFrequencies.count() /*Computing number of documents*/
 
-    val docIds = termDocumentFrequencies.map(_._1).zipWithUniqueId().map(_.swap).collectAsMap().toMap
+    val idDocs = termDocumentFrequencies.map(_._1).zipWithUniqueId().collectAsMap().toMap
+    val docIds = idDocs.map(_.swap)
     /* Documents names are associated to unique ids */
 /***********************************************TERM FREQUENCIES ENDS HERE*********************************************/
 
@@ -150,7 +154,7 @@ object LsaApp {
     // val docFreqs = documentFrequencies.collect().sortBy(- _._2)    
 
     
-    val docFreqs = documentFrequencies.filter{ case(identifier,count) => count >1 && count <= numDocs/2}.map{case(id,c) =>
+    val docFreqs = documentFrequencies.filter{ case(identifier,count) => count >1 && count <= numDocs/5}.map{case(id,c) =>
       (-c,id)}.sortByKey().map{case(c,id) => (id,-c)}
     /* Filtering (identifier, df) pairs from 'documentFrequencies' based on optimization specified in paper*/
     docFreqs.persist(StorageLevel.MEMORY_AND_DISK)
@@ -218,7 +222,10 @@ object LsaApp {
     val topConceptTerms = topTermsInTopConcepts(svd, numTopConcepts, numTopTerms, termIds)
     /* Extracts top documents from top most concepts */
     val topConceptDocs = topDocsInTopConcepts(svd, numTopConcepts, numTopDocs, docIds)
-    
+
+    val US = multiplyByDiagonalMatrix(svd.U, svd.s)
+
+    val normalizedUS = rowsNormalized(US)        
 /*******************************************CONSOLE PRINTING STARTS HERE***********************************************/
     println("********************************Number of Documents: " +numDocs +" **************************************")
     println("**************************Size of Feature Vector: " +featureVectorSize +" *******************************")
@@ -251,13 +258,19 @@ object LsaApp {
     println("Number of rows: "+m+ " " + "Number of Columns: "+n)
     println("**********************************************Doc Ids****************************************************")
     docIds.take(10).foreach(println)
-    val regexToRemovePath = """.*\/""".r
+    
     for ((terms, docs) <- topConceptTerms.zip(topConceptDocs)) {
       println("Concept terms: " + terms.map(_._1).mkString(", ")  )
       // println("Concept docs: " + docs.map(_._1).mkString(", "))
       println("Concept docs: ")
-      docs.map(_._1).foreach{x => println(regexToRemovePath.replaceAllIn(x,""))}
+      docs.map(_._1).foreach(println)
       println()
+    }
+    println("Enter a repo to find similar repos:")
+    for (ln <- Source.stdin.getLines) {
+      println("Top documents for "+ln+" are:")
+      printTopDocsForDoc(normalizedUS, ln.toString, idDocs, docIds)
+      println("Enter a repo to find similar repos:")
     }
 /*********************************************CONSOLE PRINTING ENDS HERE***********************************************/
 
@@ -296,4 +309,65 @@ object LsaApp {
     }
     topDocs
   }
+
+   /**
+   * Selects a row from a distributed matrix.
+   */
+  def row(mat: RowMatrix, id: Long): Array[Double] = {
+    mat.rows.zipWithUniqueId.map(_.swap).lookup(id).head.toArray
+  }
+
+
+  /**
+   * Returns a distributed matrix where each row is divided by its length.
+   */
+  def rowsNormalized(mat: RowMatrix): RowMatrix = {
+    new RowMatrix(mat.rows.map(vec => {
+      val length = math.sqrt(vec.toArray.map(x => x * x).sum)
+      Vectors.dense(vec.toArray.map(_ / length))
+    }))
+  }
+
+
+  def multiplyByDiagonalMatrix(mat: RowMatrix, diag: Vector): RowMatrix = {
+    val sArr = diag.toArray
+    new RowMatrix(mat.rows.map(vec => {
+      val vecArr = vec.toArray
+      val newArr = (0 until vec.size).toArray.map(i => vecArr(i) * sArr(i))
+      Vectors.dense(newArr)
+    }))
+  }
+
+  /**
+   * Finds docs relevant to a doc. Returns the doc IDs and scores for the docs with the highest
+   * relevance scores to the given doc.
+   */
+  def topDocsForDoc(normalizedUS: RowMatrix, docId: Long): Seq[(Double, Long)] = {
+    // Look up the row in US corresponding to the given doc ID.
+    val docRowArr = row(normalizedUS, docId)
+    val docRowVec = Matrices.dense(docRowArr.length, 1, docRowArr)
+
+
+    // Compute scores against every doc
+    val docScores = normalizedUS.multiply(docRowVec)
+
+    // Find the docs with the highest scores
+    val allDocWeights = docScores.rows.map(_.toArray(0)).zipWithUniqueId
+
+    // Docs can end up with NaN score if their row in U is all zeros.  Filter these out.
+    allDocWeights.filter(!_._1.isNaN).top(10)
+  }
+
+  def printIdWeights[T](idWeights: Seq[(Double, T)], entityIds: Map[T, String]) {
+    idWeights.map{case (score, id) => (entityIds(id), score)}.foreach(println)
+    // val docs = idWeights.map{case (score, id) => (entityIds(id), score)}
+    // docs.map(_._1).foreach(x => println(regexToRemovePath.replaceAllIn(x,"")))
+  }
+
+  def printTopDocsForDoc(normalizedUS: RowMatrix, doc: String, idDocs: Map[String, Long],
+      docIds: Map[Long, String]) {
+    printIdWeights[Long](topDocsForDoc(normalizedUS, idDocs(doc)), docIds)
+  }
+
+
 }
