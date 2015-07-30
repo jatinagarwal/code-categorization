@@ -39,10 +39,14 @@ object LsaApp {
     val numTopDocs = if (args.length > 3) args(3).toInt else 10
     /* 'numTopDocs' is the number of top docs in a concept. If not passed then by default it is set to 10 */
 
-    val dataFiles = if (args.length > 4) args(4).toString else "Data/sampleJava"
+     val featureVectorPercent = if (args.length > 4) args(4).toDouble else 1.0
+    /* 'featureVectorPercent' is the percentage of terms with top document frequencies feature vector*/
+
+    val dataFiles = if (args.length > 5) args(5).toString else "Data/sampleJava"
     /* 'dataFiles' implies path of the directory where data resides */
   /******************************************** INITIALIZATION STARTS HERE********************************************/
     /* 'keywords' is list of all reserve words in java programming language*/
+    var a = readChar()
   	val keywords = List("abstract", "continue", "for", "new", "switch", "assert", "default", "goto", "package",
     "synchronized", "boolean", "do", "if", "private", "this", "break", "double", "implements", "protected", "throw",
     "byte", "else", "import", "public", "throws", "case", "enum", "instanceof", "return", "transient", "catch",
@@ -54,9 +58,10 @@ object LsaApp {
      object in order to perform configuration settings. 'Lsa Application' is name of application*/
     val sc = new SparkContext(conf)/* 'sc' is spark context object to perform all spark related 
     operations with configuration setting from 'conf' */
-    val codeData = sc.binaryFiles(dataFiles).cache()/* 'codeData' is a RDD representing tuples of form 
+    val codeData = sc.binaryFiles(dataFiles)/* 'codeData' is a RDD representing tuples of form
     (fileName, fileContent) where 'fileContent' is content in a file named 'fileName'. Here both 'fileName' 
      and 'fileContent are strings. 'codeData' is cached to avoid memoery overhead */
+    //codeData.persist(StorageLevel.MEMORY_AND_DISK)
     val reserveWords = sc.broadcast(keywords) /* Broadcasting reserve words to be used during data parsing*/
   /********************************************** INITIALIZATION ENDS HERE*********************************************/
 
@@ -72,13 +77,13 @@ object LsaApp {
   }
 
 
-  // val commentsRemoved = zipStreamToText.mapValues{fileContent =>
-  //   val reader:Reader = new StringReader(fileContent);
-  //   val writer: StringWriter = new StringWriter(fileContent.length());
-  //   val jcr: JavaCommentsRemover = new JavaCommentsRemover(reader,writer);
-  //   val codeWithOutComments = jcr.process();
-  //   codeWithOutComments   
-  // }
+  val commentsRemoved = zipStreamToText.mapValues{fileContent =>
+    val reader:Reader = new StringReader(fileContent);
+    val writer: StringWriter = new StringWriter();
+    val jcr: JavaCommentsRemover = new JavaCommentsRemover(reader,writer);
+    val codeWithOutComments = jcr.process();
+    codeWithOutComments   
+  }
   /*******************************************************************************************************************/
 
 
@@ -86,7 +91,7 @@ object LsaApp {
 
   /**********************************************DATA PARSING STARTS HERE**********************************************/
     /* In this step, data is cleaned by removing all comments and special characters from each '.java' file*/
-    val codeDataWithOutComments = zipStreamToText.mapValues{fileContent =>
+    val codeDataWithOutComments = commentsRemoved.mapValues{fileContent =>
     	// val regexForComments = """(/\*([^*]|[\r\n]|(\*+([^*/]|[\r\n])))*\*+/)|(//.*)""".r 
      //  /* 'regexForComments' represent	a pattern for all types of comments in java program  */
       val regexSpecialChars = """[^a-zA-Z\s]""".r/* 'regexSpecialchars' represents a pattern for special characters*/
@@ -139,19 +144,24 @@ object LsaApp {
     (identifier, 1) pair is reduced based on key to compute (identifier, df) where 'df' is the document frequency of
      identifier across all the documents*/
     val documentFrequencies = termDocumentFrequencies.flatMapValues(inp => 
-      inp).values.mapValues{inp => 1}.reduceByKey((x,y) => x+y).sortByKey() 
+      inp).values.mapValues{inp => 1}.reduceByKey((x,y) => x+y)
     /* In above step document frequencies are calculated for the terms across all the documents*/
   
-    // val docFreqs = documentFrequencies.collect().sortBy(- _._2)
+    // val docFreqs = documentFrequencies.collect().sortBy(- _._2)    
+
     
-    val docFreqs = documentFrequencies.filter{ case(identifier,count) => count >1 && count <= numDocs/2}
+    val docFreqs = documentFrequencies.filter{ case(identifier,count) => count >1 && count <= numDocs/2}.map{case(id,c) =>
+      (-c,id)}.sortByKey().map{case(c,id) => (id,-c)}
     /* Filtering (identifier, df) pairs from 'documentFrequencies' based on optimization specified in paper*/
     docFreqs.persist(StorageLevel.MEMORY_AND_DISK)
+    val numTerms = docFreqs.count()
     /* RDD 'docFreqs' is persisted in the memory as two or more transformation are performed on it*/
-    val idfs = inverseDocumentFrequencies(docFreqs, numDocs)
+    var featureVectorSize:Int = (numTerms*featureVectorPercent).toInt;
+    val featureVector = docFreqs.take(featureVectorSize)
+    val idfs = inverseDocumentFrequencies(featureVector, numDocs)
     /* Computing inverse document frequencies 'idfs' from document frequencies */
-    val bidfs = sc.broadcast(idfs.collectAsMap())/* Broadcasting 'idfs' across nodes of cluster*/   
-    val vocabulary = docFreqs.keys.collect()/* Collecting all the identifiers from filtering (identifier, df) pairs*/
+    val bidfs = sc.broadcast(idfs.toMap)/* Broadcasting 'idfs' across nodes of cluster*/
+    val vocabulary = featureVector.toMap.keySet/* Collecting all the identifiers from filtering (identifier, df) pairs*/
     val tl = vocabulary.zipWithIndex.toMap
     val termList = sc.broadcast(tl)/* Broadcasting vocabulary across all nodes of clusters*/
     val termIds = vocabulary.zipWithIndex.map(_.swap).toMap /* Terms are associated with the ids as shown (id, term) */
@@ -168,6 +178,7 @@ object LsaApp {
       val allIdentifiers = termList.value/* Locally obtaining broadcasted  values */
       // val end=ystem.currentTimeMillis() 
       // println("time in seconds  " + (end-start)/1000.0)
+      val docTotalTerms = termFreqPair.values.sum
       val termInThisDocument = termFreqPair.keySet.toList/* Obtaining all terms from this document*/
       // val filteredTerms =  new ListBuffer[String]()
       // for(term <- termInThisDocument if allIdentifiers.contains(term)) filteredTerms+=term 
@@ -177,7 +188,7 @@ object LsaApp {
       var tfidfMap:Map[Int,Double] = Map()/* Computing a map of (identifier, tfidf) pairs from term-document
        (identifier, count) pairs and document-frequency (identifier, idfs) pair */
       for(term <- termInThisDocument if allIdentifiers.contains(term)) {
-        tfidfMap += (allIdentifiers(term) -> termFreqPair(term)*idf(term)) /* TFIDF computation */
+        tfidfMap += (allIdentifiers(term) -> termFreqPair(term)*idf(term)/docTotalTerms) /* TFIDF computation */
       }      
       val tfidfSeq = tfidfMap.toSeq/* Converting 'tfidfMap' map to a sequence */
       Vectors.sparse(sizeOfVector, tfidfSeq) /*Obtaining sparse vector from 'tfidfSeq' sequence and 'sizeOfVector'*/
@@ -210,8 +221,9 @@ object LsaApp {
     
 /*******************************************CONSOLE PRINTING STARTS HERE***********************************************/
     println("********************************Number of Documents: " +numDocs +" **************************************")
+    println("**************************Size of Feature Vector: " +featureVectorSize +" *******************************")
     // println("***********************************Total terms ***************************: "+ documentFrequencies.count())
-    println("****************************Number of Terms after filtering: " +vocabulary.size+" ***********************")
+    println("****************************Number of Terms after filtering: " +numTerms+" ***********************")
     println("*************************************** LIST OF WORDS ***************************************************")
 //    identifiersForEachDocument.take(2).foreach(println)
 //
@@ -227,8 +239,8 @@ object LsaApp {
 //
 //    println("***************************************** DOCUMET FREQUENCIES *****************************************")
 //    documentFrequencies.foreach(println)
-//    println("**************************************FILTERED DOCUMET FREQUENCIES ************************************")
-//    docFreqs.foreach(println)
+   println("**************************************FILTERED DOCUMET FREQUENCIES ************************************")
+   featureVector.foreach(println)
 //
 //    println("***************************************** TFIDF VECTORS ***********************************************")
 //    tfidf.values.take(10).foreach(println)
@@ -251,8 +263,8 @@ object LsaApp {
 
   }
   /* FUNCTION TO COMPUTE INVERSE DCOUMENT FREQUENCIES*/
-  def inverseDocumentFrequencies(docFreqs: RDD[(String, Int)], numDocs: Long)
-    : RDD[(String, Double)] = {
+  def inverseDocumentFrequencies(docFreqs: Array[(String, Int)], numDocs: Long)
+    : Array[(String, Double)] = {
     docFreqs.map{ case (term, count) => (term, math.log(numDocs.toDouble / count))}
   }
 

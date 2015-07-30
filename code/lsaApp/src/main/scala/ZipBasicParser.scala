@@ -60,17 +60,18 @@ object ZipBasicParser extends Logger {
         ze = Option(zipStream.getNextEntry)
         ze.foreach { ze => if (ze.getName.endsWith("java") && !ze.isDirectory) {
           val fileName = ze.getName
-          val in:Reader = new StringReader(readContent(zipStream))
-          try {
-            val cu = JavaParser.parse(in, false)
-            fileContent.append(cu.toString())
-          }
-          catch {
-            case t: Throwable => log.error("Lexical error in next entry", t) // log and suppress 
-            count = count + 1 
-            fileContent.append("") 
-          }
-          in.close() 
+          fileContent.append(readContent(zipStream))
+          // val in:Reader = new StringReader(readContent(zipStream))
+          // try {
+          //   val cu = JavaParser.parse(in, false)
+          //   fileContent.append(cu.toString())
+          // }
+          // catch {
+          //   case t: Throwable => log.error("Lexical error in next entry", t) // log and suppress 
+          //   count = count + 1 
+          //   fileContent.append("") 
+          // }
+          // in.close() 
         } 
         }
       } while (ze.isDefined)
