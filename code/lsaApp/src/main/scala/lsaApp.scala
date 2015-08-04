@@ -7,10 +7,12 @@ import org.apache.spark.SparkContext._
 import org.apache.spark.SparkConf
 import org.apache.spark.storage.StorageLevel
 
+import breeze.linalg.{DenseMatrix => BDenseMatrix, DenseVector => BDenseVector, SparseVector => BSparseVector}
 import org.apache.spark._
 import org.apache.spark.mllib.linalg.{Matrix, SingularValueDecomposition, Vectors, Matrices, Vector}
 import org.apache.spark.mllib.linalg.distributed.RowMatrix
 import org.apache.spark.rdd.RDD
+import org.slf4j.LoggerFactory
 
 import java.util.zip.ZipInputStream;
 import java.io.Reader;
@@ -23,9 +25,10 @@ import scala.collection.mutable.ListBuffer
 import scala.collection.immutable.Map
 import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
+import scala.util.Try
+import scala.util.control.Breaks._
 
-
-object LsaApp {
+object LsaApp extends Logger {
   def main(args: Array[String]) {
     val k = if (args.length > 0) args(0).toInt else 100
     /* 'k' is dimensionanlity of the term-documentt matrix which should be
@@ -81,10 +84,10 @@ object LsaApp {
 
 
   val commentsRemoved = zipStreamToText.mapValues{fileContent =>
-    val reader:Reader = new StringReader(fileContent);
-    val writer: StringWriter = new StringWriter();
-    val jcr: JavaCommentsRemover = new JavaCommentsRemover(reader,writer);
-    val codeWithOutComments = jcr.process();
+    val reader:Reader = new StringReader(fileContent)
+    val writer: StringWriter = new StringWriter()
+    val jcr: JavaCommentsRemover = new JavaCommentsRemover(reader,writer)
+    val codeWithOutComments = jcr.process()
     codeWithOutComments   
   }
   /*******************************************************************************************************************/
@@ -164,11 +167,12 @@ object LsaApp {
     val featureVector = docFreqs.take(featureVectorSize)
     val idfs = inverseDocumentFrequencies(featureVector, numDocs)
     /* Computing inverse document frequencies 'idfs' from document frequencies */
-    val bidfs = sc.broadcast(idfs.toMap)/* Broadcasting 'idfs' across nodes of cluster*/
-    val vocabulary = featureVector.toMap.keySet/* Collecting all the identifiers from filtering (identifier, df) pairs*/
-    val tl = vocabulary.zipWithIndex.toMap
-    val termList = sc.broadcast(tl)/* Broadcasting vocabulary across all nodes of clusters*/
-    val termIds = vocabulary.zipWithIndex.map(_.swap).toMap /* Terms are associated with the ids as shown (id, term) */
+    val idfsMap = idfs.toMap
+    val bidfs = sc.broadcast(idfsMap)/* Broadcasting 'idfs' across nodes of cluster*/
+    val vocabulary = idfsMap.keys.zipWithIndex.toMap/* Collecting all the identifiers after filtering (identifier, df) pairs*/
+    //val tl = vocabulary.zipWithIndex.toMap
+    val termList = sc.broadcast(vocabulary)/* Broadcasting vocabulary across all nodes of clusters*/
+    val termIds = vocabulary.map(_.swap).toMap /* Terms are associated with the ids as shown (id, term) */
 /*******************************************DOCUMENT FREQUENCIES ENDS HERE*********************************************/
 
 
@@ -224,8 +228,10 @@ object LsaApp {
     val topConceptDocs = topDocsInTopConcepts(svd, numTopConcepts, numTopDocs, docIds)
 
     val US = multiplyByDiagonalMatrix(svd.U, svd.s)
+    val normalizedUS = rowsNormalized(US)
 
-    val normalizedUS = rowsNormalized(US)        
+    val VS = multiplyByDiagonalMatrix(svd.V, svd.s)
+    val normalizedVS = rowsNormalized(VS)
 /*******************************************CONSOLE PRINTING STARTS HERE***********************************************/
     println("********************************Number of Documents: " +numDocs +" **************************************")
     println("**************************Size of Feature Vector: " +featureVectorSize +" *******************************")
@@ -258,7 +264,7 @@ object LsaApp {
     println("Number of rows: "+m+ " " + "Number of Columns: "+n)
     println("**********************************************Doc Ids****************************************************")
     docIds.take(10).foreach(println)
-    
+        
     for ((terms, docs) <- topConceptTerms.zip(topConceptDocs)) {
       println("Concept terms: " + terms.map(_._1).mkString(", ")  )
       // println("Concept docs: " + docs.map(_._1).mkString(", "))
@@ -267,11 +273,50 @@ object LsaApp {
       println()
     }
     println("Enter a repo to find similar repos:")
-    for (ln <- Source.stdin.getLines) {
-      println("Top documents for "+ln+" are:")
-      printTopDocsForDoc(normalizedUS, ln.toString, idDocs, docIds)
-      println("Enter a repo to find similar repos:")
+    breakable {
+      for (doc <- Source.stdin.getLines) {
+        if(doc.toString == "break")
+          break
+        println("Top documents for "+doc+" are:")
+        printTopDocsForDoc(normalizedUS, doc.toString, idDocs, docIds)
+        println("Enter a repo to find similar repos:")
+      }
     }
+
+    println("Enter a term to find similar terms:")
+    breakable {
+      for (term <- Source.stdin.getLines) {
+        if(term.toString == "break")
+          break
+        println("Top terms for "+term+" are:")
+        printRelevantTerms(term.toString, normalizedVS, vocabulary, termIds)
+        println("Enter a term to find similar terms:")
+      }
+    }
+
+    println("Enter a term to find repos containing it:")
+    breakable {
+      for (term <- Source.stdin.getLines) {
+        if(term.toString == "break")
+          break
+        println("Top documents contianing "+term+":")
+        printTopDocsForTerm(normalizedUS, svd.V, term.toString, vocabulary, docIds)
+        println("Enter a terms to find repos containing it:")
+      }
+    }
+
+    println("Enter set of term to find repos containing it:")
+    breakable {
+      for (term <- Source.stdin.getLines) {
+        if(term.toString == "break")
+          break
+        println("Top documents contianing "+term+":")
+        val termSeq = term.toString.split(",").toSeq
+        printRelevantDocs(US, svd.V, termSeq, vocabulary, idfsMap, docIds)
+        println("Enter set of terms to find repos containing it:")
+      }
+    }
+    
 /*********************************************CONSOLE PRINTING ENDS HERE***********************************************/
 
   }
@@ -310,11 +355,39 @@ object LsaApp {
     topDocs
   }
 
+  /**
+   * Selects a row from a matrix.
+   */
+  def row(mat: BDenseMatrix[Double], index: Int): Seq[Double] = {
+    (0 until mat.cols).map(c => mat(index, c))
+  }
+
+
+   /**
+   * Selects a row from a matrix.
+   */
+  def row(mat: Matrix, index: Int): Seq[Double] = {
+    val arr = mat.toArray
+    (0 until mat.numCols).map(i => arr(index + i * mat.numRows))
+  }
+
    /**
    * Selects a row from a distributed matrix.
    */
   def row(mat: RowMatrix, id: Long): Array[Double] = {
     mat.rows.zipWithUniqueId.map(_.swap).lookup(id).head.toArray
+  }
+
+  /**
+   * Returns a matrix where each row is divided by its length.
+   */
+  def rowsNormalized(mat: BDenseMatrix[Double]): BDenseMatrix[Double] = {
+    val newMat = new BDenseMatrix[Double](mat.rows, mat.cols)
+    for (r <- 0 until mat.rows) {
+      val length = math.sqrt((0 until mat.cols).map(c => mat(r, c) * mat(r, c)).sum)
+      (0 until mat.cols).map(c => newMat.update(r, c, mat(r, c) / length))
+    }
+    newMat
   }
 
 
@@ -328,6 +401,15 @@ object LsaApp {
     }))
   }
 
+   /**
+   * Finds the product of a dense matrix and a diagonal matrix represented by a vector.
+   * Breeze doesn't support efficient diagonal representations, so multiply manually.
+   */
+  def multiplyByDiagonalMatrix(mat: Matrix, diag: Vector): BDenseMatrix[Double] = {
+    val sArr = diag.toArray
+    new BDenseMatrix[Double](mat.numRows, mat.numCols, mat.toArray)
+      .mapPairs{case ((r, c), v) => v * sArr(c)}
+  }
 
   def multiplyByDiagonalMatrix(mat: RowMatrix, diag: Vector): RowMatrix = {
     val sArr = diag.toArray
@@ -366,8 +448,87 @@ object LsaApp {
 
   def printTopDocsForDoc(normalizedUS: RowMatrix, doc: String, idDocs: Map[String, Long],
       docIds: Map[Long, String]) {
-    printIdWeights[Long](topDocsForDoc(normalizedUS, idDocs(doc)), docIds)
+    try {
+      val docID:Long = idDocs(doc)
+      printIdWeights[Long](topDocsForDoc(normalizedUS, docID), docIds)
+    } catch {
+      case ex: Exception => log.error("Exception doc not found {}", ex)
+      println("Term not found. Enter another term")
+    }
   }
 
+  def topDocsForTerm(US: RowMatrix, V: Matrix, termId: Int): Seq[(Double, Long)] = {
+    val termRowArr = row(V, termId).toArray
+    val termRowVec = Matrices.dense(termRowArr.length, 1, termRowArr)
 
+    // Compute scores against every doc
+    val docScores = US.multiply(termRowVec)
+
+    // Find the docs with the highest scores
+    val allDocWeights = docScores.rows.map(_.toArray(0)).zipWithUniqueId
+    allDocWeights.filter(!_._1.isNaN).top(10)
+  }
+
+  def printTopDocsForTerm(US: RowMatrix, V: Matrix, term: String, idTerms: Map[String, Int],
+      docIds: Map[Long, String]) {
+    try {
+      val termID:Int = idTerms(term)
+      printIdWeights[Long](topDocsForTerm(US, V, termID), docIds)
+    } catch {
+      case ex: Exception => log.error("Exception term not found {}", ex)
+      println("Term not found. Enter another term")
+    }
+  }
+
+  def termsToQueryVector(terms: Seq[String], idTerms: Map[String, Int], idfs: Map[String, Double])
+    : BSparseVector[Double] = {
+    val indices = terms.map(idTerms(_)).toArray
+    val values = terms.map(idfs(_)).toArray
+    new BSparseVector[Double](indices, values, idTerms.size)
+  }
+
+  def topDocsForTermQuery(US: RowMatrix, V: Matrix, query: BSparseVector[Double])
+    : Seq[(Double, Long)] = {
+    val breezeV = new BDenseMatrix[Double](V.numRows, V.numCols, V.toArray)
+    val termRowArr = (breezeV.t * query).toArray
+
+    val termRowVec = Matrices.dense(termRowArr.length, 1, termRowArr)
+
+    // Compute scores against every doc
+    val docScores = US.multiply(termRowVec)
+
+    // Find the docs with the highest scores
+    val allDocWeights = docScores.rows.map(_.toArray(0)).zipWithUniqueId
+    allDocWeights.filter(!_._1.isNaN).top(10)
+  }
+
+  def printRelevantDocs(US: RowMatrix, V: Matrix, terms: Seq[String], idTerms: Map[String, Int], idfs: Map[String, Double], docIds: Map[Long, String]) {
+    val queryVec = termsToQueryVector(terms, idTerms, idfs)
+    printIdWeights(topDocsForTermQuery(US, V, queryVec), docIds)
+  }
+
+  /**
+   * Finds terms relevant to a term. Returns the term IDs and scores for the terms with the highest
+   * relevance scores to the given term.
+   */
+  def topTermsForTerm(normalizedVS: BDenseMatrix[Double], termId: Int): Seq[(Double, Int)] = {
+    // Look up the row in VS corresponding to the given term ID.
+    val termRowVec = new BDenseVector[Double](row(normalizedVS, termId).toArray)
+
+    // Compute scores against every term
+    val termScores = (normalizedVS * termRowVec).toArray.zipWithIndex
+
+    // Find the terms with the highest scores
+    termScores.sortBy(-_._1).take(20)
+  }
+
+  def printRelevantTerms(term: String, normalizedVS: BDenseMatrix[Double], idTerms: Map[String, Int], termIds: Map[Int, String]) {
+    try {
+      val id = idTerms(term)
+      printIdWeights[Int](topTermsForTerm(normalizedVS, id), termIds)
+    } catch {
+      case ex: Exception => log.error("Exception term not found {}", ex)
+      println("Term not found. Enter another term")
+    }
+  }
 }
