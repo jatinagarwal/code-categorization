@@ -117,7 +117,7 @@ object LsaApp extends Logger {
       val allReserveWords = reserveWords.value /* Broadcasted listed of reserve words are accessed and stored in
       'allReserveWords' */
       val removeReserveWords =  new ListBuffer[String]()/* 'removeReserveWords' is list buffer to strings */      
-      for(word <- listOfWords if !allReserveWords.contains(word)) removeReserveWords+=word/* words other than reserve
+      for(word <- listOfWords if !allReserveWords.contains(word)) removeReserveWords+=word.toLowerCase/* words other than reserve
        words are appended to 'removeReserveWords'*/
       val bagOfWords:List[String] = removeReserveWords.toList.sorted/* 'bagOfWords' contains sorted list of identifiers from a
       '.java'*/
@@ -278,7 +278,7 @@ object LsaApp extends Logger {
         if(doc.toString == "break")
           break
         println("Top documents for "+doc+" are:")
-        printTopDocsForDoc(normalizedUS, doc.toString, idDocs, docIds)
+        printTopDocsForDoc(normalizedUS, doc.toString, idDocs, docIds, numTopDocs)
         println("Enter a repo to find similar repos:")
       }
     }
@@ -300,7 +300,7 @@ object LsaApp extends Logger {
         if(term.toString == "break")
           break
         println("Top documents contianing "+term+":")
-        printTopDocsForTerm(normalizedUS, svd.V, term.toString, vocabulary, docIds)
+        printTopDocsForTerm(normalizedUS, svd.V, term.toString, vocabulary, docIds, numTopDocs)
         println("Enter a terms to find repos containing it:")
       }
     }
@@ -312,7 +312,7 @@ object LsaApp extends Logger {
           break
         println("Top documents contianing "+term+":")
         val termSeq = term.toString.split(",").toSeq
-        printRelevantDocs(US, svd.V, termSeq, vocabulary, idfsMap, docIds)
+        printRelevantDocs(US, svd.V, termSeq, vocabulary, idfsMap, docIds, numTopDocs)
         println("Enter set of terms to find repos containing it:")
       }
     }
@@ -424,7 +424,7 @@ object LsaApp extends Logger {
    * Finds docs relevant to a doc. Returns the doc IDs and scores for the docs with the highest
    * relevance scores to the given doc.
    */
-  def topDocsForDoc(normalizedUS: RowMatrix, docId: Long): Seq[(Double, Long)] = {
+  def topDocsForDoc(normalizedUS: RowMatrix, docId: Long, numTopDocs:Int): Seq[(Double, Long)] = {
     // Look up the row in US corresponding to the given doc ID.
     val docRowArr = row(normalizedUS, docId)
     val docRowVec = Matrices.dense(docRowArr.length, 1, docRowArr)
@@ -437,7 +437,7 @@ object LsaApp extends Logger {
     val allDocWeights = docScores.rows.map(_.toArray(0)).zipWithUniqueId
 
     // Docs can end up with NaN score if their row in U is all zeros.  Filter these out.
-    allDocWeights.filter(!_._1.isNaN).top(10)
+    allDocWeights.filter(!_._1.isNaN).top(numTopDocs)
   }
 
   def printIdWeights[T](idWeights: Seq[(Double, T)], entityIds: Map[T, String]) {
@@ -447,17 +447,17 @@ object LsaApp extends Logger {
   }
 
   def printTopDocsForDoc(normalizedUS: RowMatrix, doc: String, idDocs: Map[String, Long],
-      docIds: Map[Long, String]) {
+      docIds: Map[Long, String], numTopDocs:Int) {
     try {
       val docID:Long = idDocs(doc)
-      printIdWeights[Long](topDocsForDoc(normalizedUS, docID), docIds)
+      printIdWeights[Long](topDocsForDoc(normalizedUS, docID, numTopDocs), docIds)
     } catch {
       case ex: Exception => log.error("Exception doc not found {}", ex)
       println("Term not found. Enter another term")
     }
   }
 
-  def topDocsForTerm(US: RowMatrix, V: Matrix, termId: Int): Seq[(Double, Long)] = {
+  def topDocsForTerm(US: RowMatrix, V: Matrix, termId: Int, numTopDocs:Int): Seq[(Double, Long)] = {
     val termRowArr = row(V, termId).toArray
     val termRowVec = Matrices.dense(termRowArr.length, 1, termRowArr)
 
@@ -466,14 +466,14 @@ object LsaApp extends Logger {
 
     // Find the docs with the highest scores
     val allDocWeights = docScores.rows.map(_.toArray(0)).zipWithUniqueId
-    allDocWeights.filter(!_._1.isNaN).top(10)
+    allDocWeights.filter(!_._1.isNaN).top(numTopDocs)
   }
 
   def printTopDocsForTerm(US: RowMatrix, V: Matrix, term: String, idTerms: Map[String, Int],
-      docIds: Map[Long, String]) {
+      docIds: Map[Long, String], numTopDocs:Int) {
     try {
       val termID:Int = idTerms(term)
-      printIdWeights[Long](topDocsForTerm(US, V, termID), docIds)
+      printIdWeights[Long](topDocsForTerm(US, V, termID, numTopDocs), docIds)
     } catch {
       case ex: Exception => log.error("Exception term not found {}", ex)
       println("Term not found. Enter another term")
@@ -487,7 +487,7 @@ object LsaApp extends Logger {
     new BSparseVector[Double](indices, values, idTerms.size)
   }
 
-  def topDocsForTermQuery(US: RowMatrix, V: Matrix, query: BSparseVector[Double])
+  def topDocsForTermQuery(US: RowMatrix, V: Matrix, query: BSparseVector[Double], numTopDocs:Int)
     : Seq[(Double, Long)] = {
     val breezeV = new BDenseMatrix[Double](V.numRows, V.numCols, V.toArray)
     val termRowArr = (breezeV.t * query).toArray
@@ -499,12 +499,12 @@ object LsaApp extends Logger {
 
     // Find the docs with the highest scores
     val allDocWeights = docScores.rows.map(_.toArray(0)).zipWithUniqueId
-    allDocWeights.filter(!_._1.isNaN).top(10)
+    allDocWeights.filter(!_._1.isNaN).sortBy(-_._1).top(numTopDocs)
   }
 
-  def printRelevantDocs(US: RowMatrix, V: Matrix, terms: Seq[String], idTerms: Map[String, Int], idfs: Map[String, Double], docIds: Map[Long, String]) {
+  def printRelevantDocs(US: RowMatrix, V: Matrix, terms: Seq[String], idTerms: Map[String, Int], idfs: Map[String, Double], docIds: Map[Long, String], numTopDocs:Int) {
     val queryVec = termsToQueryVector(terms, idTerms, idfs)
-    printIdWeights(topDocsForTermQuery(US, V, queryVec), docIds)
+    printIdWeights(topDocsForTermQuery(US, V, queryVec, numTopDocs), docIds)
   }
 
   /**
