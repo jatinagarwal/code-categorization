@@ -2,7 +2,10 @@
 package com.lsa.app
 import com.lsa.app.ZipBasicParser
 import com.lsa.app.JavaCommentsRemover
+import com.lsa.app.CamelCase
+
 import org.apache.spark.SparkContext
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.SparkContext._
 import org.apache.spark.SparkConf
 import org.apache.spark.storage.StorageLevel
@@ -15,6 +18,7 @@ import org.apache.spark.rdd.RDD
 import org.slf4j.LoggerFactory
 
 import java.util.zip.ZipInputStream;
+import java.io.FileInputStream;
 import java.io.Reader;
 import java.io.Writer;
 import java.io.StringReader;
@@ -182,16 +186,9 @@ object LsaApp extends Logger {
     /* Computing tfidf from term frequencies and Inverse document frequencies */
     val tfidf = termDocumentFrequencies.mapValues{termFreqPair =>
       val idf = bidfs.value/* Locally obtaining broadcasted bidfs values */
-      // val start = System.currentTimeMillis() 
       val allIdentifiers = termList.value/* Locally obtaining broadcasted  values */
-      // val end=ystem.currentTimeMillis() 
-      // println("time in seconds  " + (end-start)/1000.0)
       val docTotalTerms = termFreqPair.values.sum
       val termInThisDocument = termFreqPair.keySet.toList/* Obtaining all terms from this document*/
-      // val filteredTerms =  new ListBuffer[String]()
-      // for(term <- termInThisDocument if allIdentifiers.contains(term)) filteredTerms+=term 
-      // /* All relevant terms are filtered  and stored in a 'filteredTerms' */
-      // val filteredTermsOfThisDocument = filteredTerms.toList
       val sizeOfVector = allIdentifiers.size/* Computing number of terms(identifiers) across all the documents*/
       var tfidfMap:Map[Int,Double] = Map()/* Computing a map of (identifier, tfidf) pairs from term-document
        (identifier, count) pairs and document-frequency (identifier, idfs) pair */
@@ -272,6 +269,18 @@ object LsaApp extends Logger {
       docs.map(_._1).foreach(println)
       println()
     }
+
+    println("Enter a path to a repo to find similar repos:")
+    breakable {
+      for (doc <- Source.stdin.getLines) {
+        if(doc.toString == "break")
+          break
+        println("Top documents for "+doc+" are:")
+        topDocsForNewDoc(US, svd.V, vocabulary, idfsMap, docIds, doc.toString, numTopDocs, bidfs, termList, reserveWords)
+        println("Enter a path to a repo to find similar repos:")
+      }
+    }
+
     println("Enter a repo to find similar repos:")
     breakable {
       for (doc <- Source.stdin.getLines) {
@@ -438,6 +447,49 @@ object LsaApp extends Logger {
 
     // Docs can end up with NaN score if their row in U is all zeros.  Filter these out.
     allDocWeights.filter(!_._1.isNaN).top(numTopDocs)
+  }
+
+  def topDocsForNewDoc(US: RowMatrix, V: Matrix, idTerms: Map[String, Int], idfs: Map[String, Double], docIds: Map[Long, String],
+   newDocPath: String, numTopDocs:Int, bidfs:Broadcast[Map[String,Double]], termList:Broadcast[Map[String,Int]],
+    reserveWords:Broadcast[List[String]]) = {
+    val zipFile:FileInputStream = new FileInputStream(newDocPath)
+    val zipIn:ZipInputStream = new ZipInputStream(zipFile)
+    val (fileContent,count) = ZipBasicParser.readFilesAndPackages(zipIn)
+
+    val reader:Reader = new StringReader(fileContent)
+    val writer: StringWriter = new StringWriter()
+    val jcr: JavaCommentsRemover = new JavaCommentsRemover(reader,writer)
+    val codeWithOutComments = jcr.process()
+
+    val regexSpecialChars = """[^a-zA-Z\s]""".r
+    val lines = regexSpecialChars.replaceAllIn(fileContent, " ")
+
+    val listOfWords = lines.split("\\s+").toList.filter(x => x != "") /* Text 'inp' is splitted into list of words and
+      stored in listOfWords'*/
+    val allReserveWords = reserveWords.value /* Broadcasted listed of reserve words are accessed and stored in
+      'allReserveWords' */
+    val removeReserveWords =  new ListBuffer[String]()/* 'removeReserveWords' is list buffer to strings */      
+    for(word <- listOfWords if !allReserveWords.contains(word)) removeReserveWords+=word.toLowerCase/* words other than reserve
+       words are appended to 'removeReserveWords'*/
+    val bagOfWords:List[String] = removeReserveWords.toList.sorted/* 'bagOfWords' contains sorted list of identifiers from a
+      '.java'*/
+    val pairs = bagOfWords.groupBy(x => x).mapValues(_.size)
+
+    val idf = bidfs.value/* Locally obtaining broadcasted bidfs values */
+    val allIdentifiers = termList.value/* Locally obtaining broadcasted  values */
+    val docTotalTerms = pairs.values.sum
+    val termInThisDocument = pairs.keySet.toList/* Obtaining all terms from this document*/
+    val sizeOfVector = allIdentifiers.size/* Computing number of terms(identifiers) across all the documents*/
+    var tfidfMap:Map[Int,Double] = Map()/* Computing a map of (identifier, tfidf) pairs from term-document
+       (identifier, count) pairs and document-frequency (identifier, idfs) pair */
+    var termSequence = new ListBuffer[String]() 
+    for(term <- termInThisDocument if allIdentifiers.contains(term)) {
+      tfidfMap += (allIdentifiers(term) -> pairs(term)*idf(term)/docTotalTerms) /* TFIDF computation */
+      termSequence += term
+    }
+    val termSeq = termSequence.toList.toSeq
+    printRelevantDocs(US, V, termSeq, idTerms, idfs, docIds, numTopDocs)
+    // val tfidfValues = tfidfMap.values.toArray
   }
 
   def printIdWeights[T](idWeights: Seq[(Double, T)], entityIds: Map[T, String]) {
