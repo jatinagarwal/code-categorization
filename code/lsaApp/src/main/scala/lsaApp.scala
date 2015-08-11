@@ -12,17 +12,17 @@ import org.apache.spark.storage.StorageLevel
 
 import breeze.linalg.{DenseMatrix => BDenseMatrix, DenseVector => BDenseVector, SparseVector => BSparseVector}
 import org.apache.spark._
-import org.apache.spark.mllib.linalg.{Matrix, SingularValueDecomposition, Vectors, Matrices, Vector}
+import org.apache.spark.mllib.linalg.{Matrix, SingularValueDecomposition, Vectors, Matrices, Vector, DenseVector}
 import org.apache.spark.mllib.linalg.distributed.RowMatrix
 import org.apache.spark.rdd.RDD
 import org.slf4j.LoggerFactory
 
-import java.util.zip.ZipInputStream;
-import java.io.FileInputStream;
-import java.io.Reader;
-import java.io.Writer;
-import java.io.StringReader;
-import java.io.StringWriter;
+import java.util.zip.ZipInputStream
+import java.io.FileInputStream
+import java.io.Reader
+import java.io.Writer
+import java.io.StringReader
+import java.io.StringWriter
 
 import scala.util.matching.Regex
 import scala.collection.mutable.ListBuffer
@@ -120,9 +120,16 @@ object LsaApp extends Logger {
       stored in listOfWords'*/
       val allReserveWords = reserveWords.value /* Broadcasted listed of reserve words are accessed and stored in
       'allReserveWords' */
-      val removeReserveWords =  new ListBuffer[String]()/* 'removeReserveWords' is list buffer to strings */      
+      val removeReserveWords =  new ListBuffer[String]()/* 'removeReserveWords' is list buffer to strings */
       for(word <- listOfWords if !allReserveWords.contains(word)) removeReserveWords+=word.toLowerCase/* words other than reserve
        words are appended to 'removeReserveWords'*/
+      // for(word <- listOfWords if !allReserveWords.contains(word)) {
+      //   val cc:CamelCase = new CamelCase()
+      //   val words = cc.splitCamelCase(word).split(" ")
+      //   for(w <- words) {
+      //     removeReserveWords+=w/* words other than reserve words are appended to 'removeReserveWords'*/
+      //   }
+      // }
       val bagOfWords:List[String] = removeReserveWords.toList.sorted/* 'bagOfWords' contains sorted list of identifiers from a
       '.java'*/
       bagOfWords
@@ -177,6 +184,7 @@ object LsaApp extends Logger {
     //val tl = vocabulary.zipWithIndex.toMap
     val termList = sc.broadcast(vocabulary)/* Broadcasting vocabulary across all nodes of clusters*/
     val termIds = vocabulary.map(_.swap).toMap /* Terms are associated with the ids as shown (id, term) */
+    docFreqs.unpersist()
 /*******************************************DOCUMENT FREQUENCIES ENDS HERE*********************************************/
 
 
@@ -209,7 +217,6 @@ object LsaApp extends Logger {
 /**********************************************SVD COMPUTATION STARTS HERE*********************************************/
     /* Constructing sparse matrix from tfidf sparse vectors obtained in the previous step*/
     termDocumentFrequencies.unpersist()
-    docFreqs.unpersist()
     val mat = new RowMatrix(tfidf.values)
 
     val m = mat.numRows /* Number of rows in a matrix */
@@ -226,6 +233,12 @@ object LsaApp extends Logger {
 
     val US = multiplyByDiagonalMatrix(svd.U, svd.s)
     val normalizedUS = rowsNormalized(US)
+
+    val sigma = svd.s
+    val invSigma:Vector = new DenseVector(sigma.toArray.map(1/_))
+    val inverseVS = multiplyByDiagonalMatrix(svd.V, invSigma)
+    val normalizedInverseVS = rowsNormalized(inverseVS)
+
 
     val VS = multiplyByDiagonalMatrix(svd.V, svd.s)
     val normalizedVS = rowsNormalized(VS)
@@ -260,7 +273,7 @@ object LsaApp extends Logger {
 
     println("Number of rows: "+m+ " " + "Number of Columns: "+n)
     println("**********************************************Doc Ids****************************************************")
-    docIds.take(10).foreach(println)
+      docIds.take(10).foreach(println)
         
     for ((terms, docs) <- topConceptTerms.zip(topConceptDocs)) {
       println("Concept terms: " + terms.map(_._1).mkString(", ")  )
@@ -276,7 +289,7 @@ object LsaApp extends Logger {
         if(doc.toString == "break")
           break
         println("Top documents for "+doc+" are:")
-        topDocsForNewDoc(US, svd.V, vocabulary, idfsMap, docIds, doc.toString, numTopDocs, bidfs, termList, reserveWords)
+        topDocsForNewDoc(normalizedUS, normalizedInverseVS, vocabulary, idfsMap, docIds, doc.toString, numTopDocs, bidfs, termList, reserveWords)
         println("Enter a path to a repo to find similar repos:")
       }
     }
@@ -321,7 +334,7 @@ object LsaApp extends Logger {
           break
         println("Top documents contianing "+term+":")
         val termSeq = term.toString.split(",").toSeq
-        printRelevantDocs(US, svd.V, termSeq, vocabulary, idfsMap, docIds, numTopDocs)
+        printRelevantDocs(normalizedUS, normalizedInverseVS, termSeq, vocabulary, idfsMap, docIds, numTopDocs)
         println("Enter set of terms to find repos containing it:")
       }
     }
@@ -330,7 +343,7 @@ object LsaApp extends Logger {
 
   }
   /* FUNCTION TO COMPUTE INVERSE DCOUMENT FREQUENCIES*/
-  def inverseDocumentFrequencies(docFreqs: Array[(String, Int)], numDocs: Long)
+    def inverseDocumentFrequencies(docFreqs: Array[(String, Int)], numDocs: Long)
     : Array[(String, Double)] = {
     docFreqs.map{ case (term, count) => (term, math.log(numDocs.toDouble / count))}
   }
@@ -449,8 +462,9 @@ object LsaApp extends Logger {
     allDocWeights.filter(!_._1.isNaN).top(numTopDocs)
   }
 
-  def topDocsForNewDoc(US: RowMatrix, V: Matrix, idTerms: Map[String, Int], idfs: Map[String, Double], docIds: Map[Long, String],
-   newDocPath: String, numTopDocs:Int, bidfs:Broadcast[Map[String,Double]], termList:Broadcast[Map[String,Int]],
+  def topDocsForNewDoc(normalizedUS: RowMatrix, normalizedVS: BDenseMatrix[Double], idTerms: Map[String, Int],
+   idfs: Map[String, Double], docIds: Map[Long, String], newDocPath: String, numTopDocs:Int,
+    bidfs:Broadcast[Map[String,Double]], termList:Broadcast[Map[String,Int]],
     reserveWords:Broadcast[List[String]]) = {
     val zipFile:FileInputStream = new FileInputStream(newDocPath)
     val zipIn:ZipInputStream = new ZipInputStream(zipFile)
@@ -468,9 +482,16 @@ object LsaApp extends Logger {
       stored in listOfWords'*/
     val allReserveWords = reserveWords.value /* Broadcasted listed of reserve words are accessed and stored in
       'allReserveWords' */
-    val removeReserveWords =  new ListBuffer[String]()/* 'removeReserveWords' is list buffer to strings */      
-    for(word <- listOfWords if !allReserveWords.contains(word)) removeReserveWords+=word.toLowerCase/* words other than reserve
-       words are appended to 'removeReserveWords'*/
+    val removeReserveWords =  new ListBuffer[String]()  /* 'removeReserveWords' is list buffer to strings */
+    for(word <- listOfWords if !allReserveWords.contains(word)) removeReserveWords+=word.toLowerCase
+    // /* words other than reserve words are appended to 'removeReserveWords'*/
+    // // for(word <- listOfWords if !allReserveWords.contains(word)) {
+    // //   val cc:CamelCase = new CamelCase()
+    // //   val words = cc.splitCamelCase(word).split(" ")
+    // //   for(w <- words) {
+    // //     removeReserveWords+= w/* words other than reserve words are appended to 'removeReserveWords'*/
+    // //   }
+    // // }
     val bagOfWords:List[String] = removeReserveWords.toList.sorted/* 'bagOfWords' contains sorted list of identifiers from a
       '.java'*/
     val pairs = bagOfWords.groupBy(x => x).mapValues(_.size)
@@ -480,15 +501,15 @@ object LsaApp extends Logger {
     val docTotalTerms = pairs.values.sum
     val termInThisDocument = pairs.keySet.toList/* Obtaining all terms from this document*/
     val sizeOfVector = allIdentifiers.size/* Computing number of terms(identifiers) across all the documents*/
-    var tfidfMap:Map[Int,Double] = Map()/* Computing a map of (identifier, tfidf) pairs from term-document
+    var tfidfMap:Map[String,Double] = Map()/* Computing a map of (identifier, tfidf) pairs from term-document
        (identifier, count) pairs and document-frequency (identifier, idfs) pair */
-    var termSequence = new ListBuffer[String]() 
+    var termSequence = new ListBuffer[String]()
     for(term <- termInThisDocument if allIdentifiers.contains(term)) {
-      tfidfMap += (allIdentifiers(term) -> pairs(term)*idf(term)/docTotalTerms) /* TFIDF computation */
+      tfidfMap += (term -> pairs(term)*idf(term)/docTotalTerms) /* TFIDF computation */
       termSequence += term
     }
     val termSeq = termSequence.toList.toSeq
-    printRelevantDocs(US, V, termSeq, idTerms, idfs, docIds, numTopDocs)
+    printRelevantDocs(normalizedUS, normalizedVS, termSeq, idTerms, tfidfMap, docIds, numTopDocs)
     // val tfidfValues = tfidfMap.values.toArray
   }
 
@@ -539,24 +560,27 @@ object LsaApp extends Logger {
     new BSparseVector[Double](indices, values, idTerms.size)
   }
 
-  def topDocsForTermQuery(US: RowMatrix, V: Matrix, query: BSparseVector[Double], numTopDocs:Int)
+  def topDocsForTermQuery(normalizedUS: RowMatrix, normalizedVS: BDenseMatrix[Double], query: BSparseVector[Double], numTopDocs:Int)
     : Seq[(Double, Long)] = {
-    val breezeV = new BDenseMatrix[Double](V.numRows, V.numCols, V.toArray)
-    val termRowArr = (breezeV.t * query).toArray
+    // val breezeV = new BDenseMatrix[Double](V.numRows, V.numCols, V.toArray)
+    // val termRowArr = (breezeV.t * query).toArray
+    val termRowArr = (normalizedVS.t * query).toArray
+
 
     val termRowVec = Matrices.dense(termRowArr.length, 1, termRowArr)
 
     // Compute scores against every doc
-    val docScores = US.multiply(termRowVec)
+    val docScores = normalizedUS.multiply(termRowVec)
 
     // Find the docs with the highest scores
     val allDocWeights = docScores.rows.map(_.toArray(0)).zipWithUniqueId
-    allDocWeights.filter(!_._1.isNaN).sortBy(-_._1).top(numTopDocs)
+    allDocWeights.filter(!_._1.isNaN).top(numTopDocs)
   }
 
-  def printRelevantDocs(US: RowMatrix, V: Matrix, terms: Seq[String], idTerms: Map[String, Int], idfs: Map[String, Double], docIds: Map[Long, String], numTopDocs:Int) {
+  def printRelevantDocs(normalizedUS: RowMatrix, normalizedVS: BDenseMatrix[Double], terms: Seq[String], idTerms: Map[String, Int],
+   idfs: Map[String, Double], docIds: Map[Long, String], numTopDocs:Int) {
     val queryVec = termsToQueryVector(terms, idTerms, idfs)
-    printIdWeights(topDocsForTermQuery(US, V, queryVec, numTopDocs), docIds)
+    printIdWeights(topDocsForTermQuery(normalizedUS, normalizedVS, queryVec, numTopDocs), docIds)
   }
 
   /**
