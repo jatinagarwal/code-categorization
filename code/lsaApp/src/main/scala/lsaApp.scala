@@ -121,13 +121,14 @@ object LsaApp extends Logger {
       val allReserveWords = reserveWords.value /* Broadcasted listed of reserve words are accessed and stored in
       'allReserveWords' */
       val removeReserveWords =  new ListBuffer[String]()/* 'removeReserveWords' is list buffer to strings */
-      for(word <- listOfWords if !allReserveWords.contains(word)) removeReserveWords+=word.toLowerCase/* words other than reserve
-       words are appended to 'removeReserveWords'*/
+      for(word <- listOfWords if !allReserveWords.contains(word)) removeReserveWords+=word.toLowerCase
+      /* words other than reserve words are appended to 'removeReserveWords'*/
       // for(word <- listOfWords if !allReserveWords.contains(word)) {
       //   val cc:CamelCase = new CamelCase()
       //   val words = cc.splitCamelCase(word).split(" ")
       //   for(w <- words) {
-      //     removeReserveWords+=w/* words other than reserve words are appended to 'removeReserveWords'*/
+      //     removeReserveWords+=w.toLowerCase
+      //     /* words other than reserve words are appended to 'removeReserveWords'*/
       //   }
       // }
       val bagOfWords:List[String] = removeReserveWords.toList.sorted/* 'bagOfWords' contains sorted list of identifiers from a
@@ -289,7 +290,7 @@ object LsaApp extends Logger {
         if(doc.toString == "break")
           break
         println("Top documents for "+doc+" are:")
-        topDocsForNewDoc(normalizedUS, normalizedInverseVS, vocabulary, idfsMap, docIds, doc.toString, numTopDocs, bidfs, termList, reserveWords)
+        topDocsForNewDoc(normalizedUS, svd.V, vocabulary, idfsMap, docIds, doc.toString, numTopDocs, bidfs, termList, reserveWords)
         println("Enter a path to a repo to find similar repos:")
       }
     }
@@ -334,7 +335,7 @@ object LsaApp extends Logger {
           break
         println("Top documents contianing "+term+":")
         val termSeq = term.toString.split(",").toSeq
-        printRelevantDocs(normalizedUS, normalizedInverseVS, termSeq, vocabulary, idfsMap, docIds, numTopDocs)
+        printRelevantDocs(normalizedUS, svd.V, termSeq, vocabulary, idfsMap, docIds, numTopDocs)
         println("Enter set of terms to find repos containing it:")
       }
     }
@@ -462,7 +463,7 @@ object LsaApp extends Logger {
     allDocWeights.filter(!_._1.isNaN).top(numTopDocs)
   }
 
-  def topDocsForNewDoc(normalizedUS: RowMatrix, normalizedVS: BDenseMatrix[Double], idTerms: Map[String, Int],
+  def topDocsForNewDoc(normalizedUS: RowMatrix, V: Matrix, idTerms: Map[String, Int],
    idfs: Map[String, Double], docIds: Map[Long, String], newDocPath: String, numTopDocs:Int,
     bidfs:Broadcast[Map[String,Double]], termList:Broadcast[Map[String,Int]],
     reserveWords:Broadcast[List[String]]) = {
@@ -484,14 +485,15 @@ object LsaApp extends Logger {
       'allReserveWords' */
     val removeReserveWords =  new ListBuffer[String]()  /* 'removeReserveWords' is list buffer to strings */
     for(word <- listOfWords if !allReserveWords.contains(word)) removeReserveWords+=word.toLowerCase
-    // /* words other than reserve words are appended to 'removeReserveWords'*/
-    // // for(word <- listOfWords if !allReserveWords.contains(word)) {
-    // //   val cc:CamelCase = new CamelCase()
-    // //   val words = cc.splitCamelCase(word).split(" ")
-    // //   for(w <- words) {
-    // //     removeReserveWords+= w/* words other than reserve words are appended to 'removeReserveWords'*/
-    // //   }
-    // // }
+    /* words other than reserve words are appended to 'removeReserveWords'*/
+    // for(word <- listOfWords if !allReserveWords.contains(word)) {
+    //   val cc:CamelCase = new CamelCase()
+    //   val words = cc.splitCamelCase(word).split(" ")
+    //   for(w <- words) {
+    //     removeReserveWords+= w.toLowerCase
+    //     /* words other than reserve words are appended to 'removeReserveWords'*/
+    //   }
+    // }
     val bagOfWords:List[String] = removeReserveWords.toList.sorted/* 'bagOfWords' contains sorted list of identifiers from a
       '.java'*/
     val pairs = bagOfWords.groupBy(x => x).mapValues(_.size)
@@ -509,7 +511,7 @@ object LsaApp extends Logger {
       termSequence += term
     }
     val termSeq = termSequence.toList.toSeq
-    printRelevantDocs(normalizedUS, normalizedVS, termSeq, idTerms, tfidfMap, docIds, numTopDocs)
+    printRelevantDocs(normalizedUS, V, termSeq, idTerms, tfidfMap, docIds, numTopDocs)
     // val tfidfValues = tfidfMap.values.toArray
   }
 
@@ -560,11 +562,11 @@ object LsaApp extends Logger {
     new BSparseVector[Double](indices, values, idTerms.size)
   }
 
-  def topDocsForTermQuery(normalizedUS: RowMatrix, normalizedVS: BDenseMatrix[Double], query: BSparseVector[Double], numTopDocs:Int)
+  def topDocsForTermQuery(normalizedUS: RowMatrix, V: Matrix, query: BSparseVector[Double], numTopDocs:Int)
     : Seq[(Double, Long)] = {
-    // val breezeV = new BDenseMatrix[Double](V.numRows, V.numCols, V.toArray)
-    // val termRowArr = (breezeV.t * query).toArray
-    val termRowArr = (normalizedVS.t * query).toArray
+    val breezeV = new BDenseMatrix[Double](V.numRows, V.numCols, V.toArray)
+    val termRowArr = (breezeV.t * query).toArray
+    //val termRowArr = (normalizedVS.t * query).toArray
 
 
     val termRowVec = Matrices.dense(termRowArr.length, 1, termRowArr)
@@ -577,10 +579,10 @@ object LsaApp extends Logger {
     allDocWeights.filter(!_._1.isNaN).top(numTopDocs)
   }
 
-  def printRelevantDocs(normalizedUS: RowMatrix, normalizedVS: BDenseMatrix[Double], terms: Seq[String], idTerms: Map[String, Int],
+  def printRelevantDocs(normalizedUS: RowMatrix, V: Matrix, terms: Seq[String], idTerms: Map[String, Int],
    idfs: Map[String, Double], docIds: Map[Long, String], numTopDocs:Int) {
     val queryVec = termsToQueryVector(terms, idTerms, idfs)
-    printIdWeights(topDocsForTermQuery(normalizedUS, normalizedVS, queryVec, numTopDocs), docIds)
+    printIdWeights(topDocsForTermQuery(normalizedUS, V, queryVec, numTopDocs), docIds)
   }
 
   /**

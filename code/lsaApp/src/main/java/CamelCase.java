@@ -9,7 +9,7 @@ public class CamelCase
 		      String.format("%s|%s|%s",
 			 "(?<=[A-Z])(?=[A-Z][a-z])",
 			 "(?<=[^A-Z])(?=[A-Z])",
-			 "(?<=[AString-Za-z])(?=[^A-Za-z])"
+			 "(?<=[A-Za-z])(?=[^A-Za-z])"
 		      ),
 		      " "
    		);
