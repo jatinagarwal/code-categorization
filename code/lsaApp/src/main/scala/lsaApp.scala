@@ -121,7 +121,7 @@ object LsaApp extends Logger {
       val allReserveWords = reserveWords.value /* Broadcasted listed of reserve words are accessed and stored in
       'allReserveWords' */
       val removeReserveWords =  new ListBuffer[String]()/* 'removeReserveWords' is list buffer to strings */
-      for(word <- listOfWords if !allReserveWords.contains(word)) removeReserveWords+=word.toLowerCase
+      for(word <- listOfWords if !allReserveWords.contains(word)) removeReserveWords+=word
       /* words other than reserve words are appended to 'removeReserveWords'*/
       // for(word <- listOfWords if !allReserveWords.contains(word)) {
       //   val cc:CamelCase = new CamelCase()
@@ -182,7 +182,6 @@ object LsaApp extends Logger {
     val idfsMap = idfs.toMap
     val bidfs = sc.broadcast(idfsMap)/* Broadcasting 'idfs' across nodes of cluster*/
     val vocabulary = idfsMap.keys.zipWithIndex.toMap/* Collecting all the identifiers after filtering (identifier, df) pairs*/
-    //val tl = vocabulary.zipWithIndex.toMap
     val termList = sc.broadcast(vocabulary)/* Broadcasting vocabulary across all nodes of clusters*/
     val termIds = vocabulary.map(_.swap).toMap /* Terms are associated with the ids as shown (id, term) */
     docFreqs.unpersist()
@@ -344,7 +343,7 @@ object LsaApp extends Logger {
 
   }
   /* FUNCTION TO COMPUTE INVERSE DCOUMENT FREQUENCIES*/
-    def inverseDocumentFrequencies(docFreqs: Array[(String, Int)], numDocs: Long)
+  def inverseDocumentFrequencies(docFreqs: Array[(String, Int)], numDocs: Long)
     : Array[(String, Double)] = {
     docFreqs.map{ case (term, count) => (term, math.log(numDocs.toDouble / count))}
   }
@@ -484,7 +483,7 @@ object LsaApp extends Logger {
     val allReserveWords = reserveWords.value /* Broadcasted listed of reserve words are accessed and stored in
       'allReserveWords' */
     val removeReserveWords =  new ListBuffer[String]()  /* 'removeReserveWords' is list buffer to strings */
-    for(word <- listOfWords if !allReserveWords.contains(word)) removeReserveWords+=word.toLowerCase
+    for(word <- listOfWords if !allReserveWords.contains(word)) removeReserveWords+=word
     /* words other than reserve words are appended to 'removeReserveWords'*/
     // for(word <- listOfWords if !allReserveWords.contains(word)) {
     //   val cc:CamelCase = new CamelCase()
@@ -517,8 +516,6 @@ object LsaApp extends Logger {
 
   def printIdWeights[T](idWeights: Seq[(Double, T)], entityIds: Map[T, String]) {
     idWeights.map{case (score, id) => (entityIds(id), score)}.foreach(println)
-    // val docs = idWeights.map{case (score, id) => (entityIds(id), score)}
-    // docs.map(_._1).foreach(x => println(regexToRemovePath.replaceAllIn(x,"")))
   }
 
   def printTopDocsForDoc(normalizedUS: RowMatrix, doc: String, idDocs: Map[String, Long],
