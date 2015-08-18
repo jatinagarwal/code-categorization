@@ -75,68 +75,16 @@ object LsaApp extends Logger {
 
   /*******************************************************************************************************************/
   val regexToRemovePath: Regex = """.*\/""".r
-  val zipStreamToText : RDD[(String, String)] = codeData.map{
-    case(fileName, zipStream) =>
-      val zipInputStream: DataInputStream = zipStream.open()
-      val (fileContent,count) = ZipBasicParser.readFilesAndPackages(new ZipInputStream(zipInputStream))
-      println(fileName +":"+count)
-      zipInputStream.close()
-      val repoName: String = regexToRemovePath.replaceAllIn(fileName,"")
-      (repoName,fileContent)
-  }
-
-
-  val commentsRemoved: RDD[(String, String)] = zipStreamToText.mapValues{fileContent =>
-    val reader:Reader = new StringReader(fileContent)
-    val writer: StringWriter = new StringWriter()
-    val jcr: JavaCommentsRemover = new JavaCommentsRemover(reader,writer)
-    val codeWithOutComments: String = jcr.process()
-    codeWithOutComments   
-  }
+  val regexSpecialChars: Regex = """[^a-zA-Z\s]""".r/* 'regexSpecialchars' represents a pattern for special characters*/
+  val zipStreamToText : RDD[(String, String)] = zipToText(codeData,regexToRemovePath)
+  val codeDataWithOutComments: RDD[(String, String)] = removeJavaComments(zipStreamToText,regexSpecialChars)
+  val identifiersForEachDocument: RDD[(String, List[String])] = extractIdentifierCountPairs(codeDataWithOutComments,reserveWords)
   /*******************************************************************************************************************/
 
-
-
-
-  /**********************************************DATA PARSING STARTS HERE**********************************************/
-    /* In this step, data is cleaned by removing all comments and special characters from each '.java' file*/
-    val codeDataWithOutComments: RDD[(String, String)] = commentsRemoved.mapValues{fileContent =>
-    	// val regexForComments = """(/\*([^*]|[\r\n]|(\*+([^*/]|[\r\n])))*\*+/)|(//.*)""".r 
-     //  /* 'regexForComments' represent	a pattern for all types of comments in java program  */
-      val regexSpecialChars: Regex = """[^a-zA-Z\s]""".r/* 'regexSpecialchars' represents a pattern for special characters*/
-    	// val commentsRemoved = regexForComments.replaceAllIn(fileContent,"")
-      /* 'inp' represents content of a'.java' file and all occurences of 'regexForComments' is replaced by "", using 
-      'replaceAllIn' method of scala's regex utility and store the result in variable named 'commentsRemoved'*/
-    	regexSpecialChars.replaceAllIn(fileContent, " ")/* 'commentsRemoved' represents content of a'.java' file
-    	without any comments and all occurences of 'regexSpecialChars' are replaced by " ", using 'replaceAllIn' method
-    	of scala's regex utility */
-    }	
-
-
-    /* In step this cleaned text is splitted into list of words. And reserved words are removed from the list of words*/
-    val identifiersForEachDocument: RDD[(String, List[String])] = codeDataWithOutComments.mapValues{inp =>
-      val listOfWords: List[String] = inp.split("\\s+").toList.filter(x => x != "") /* Text 'inp' is splitted into list of words and
-      stored in listOfWords'*/
-      val allReserveWords: List[String] = reserveWords.value /* Broadcasted listed of reserve words are accessed and stored in
-      'allReserveWords' */
-      val removeReserveWords: ListBuffer[String] =  new ListBuffer[String]()/* 'removeReserveWords' is list buffer to strings */
-      for(word <- listOfWords if !allReserveWords.contains(word)) removeReserveWords+=word
-      /* words other than reserve words are appended to 'removeReserveWords'*/
-//       for(word <- listOfWords if !allReserveWords.contains(word)) {
-//         val cc:CamelCase = new CamelCase()
-//         val words: Array[String] = cc.splitCamelCase(word).split(" ")
-//         for(w <- words) {
-//           removeReserveWords+=w.toLowerCase
-//           /* words other than reserve words are appended to 'removeReserveWords'*/
-//         }
-//       }
-      val bagOfWords:List[String] = removeReserveWords.toList.sorted/* 'bagOfWords' contains sorted list of identifiers from a
-      '.java'*/
-      bagOfWords
-    }
+  /**********************************************DATA PARSING STARTS HERE**********************************************/  
+    
+    
   /*************************************************DATA PARSING ENDS HERE*********************************************/
-
-
 
 /************************************************TERM FREQUENCIES STARTS HERE******************************************/
      /* Computing term-document frequencies for each document*/
@@ -335,6 +283,60 @@ object LsaApp extends Logger {
 /*********************************************CONSOLE PRINTING ENDS HERE***********************************************/
 
   }
+
+  def zipToText(codeData:RDD[(String, PortableDataStream)],regexToRemovePath: Regex): RDD[(String, String)] = {
+    val zipStreamToText : RDD[(String, String)] = codeData.map{
+      case(fileName, zipStream) =>
+        val zipInputStream: DataInputStream = zipStream.open()
+        val (fileContent,count) = ZipBasicParser.readFilesAndPackages(new ZipInputStream(zipInputStream))
+        println(fileName +":"+count)
+        zipInputStream.close()
+        val repoName: String = regexToRemovePath.replaceAllIn(fileName,"")
+        (repoName,fileContent)
+    }
+    zipStreamToText 
+  }
+
+  /* Method 'removeJavaComments' removes all comments and special characters from each '.java' file*/
+  def removeJavaComments(zipStreamToText : RDD[(String, String)],regexSpecialChars: Regex) : RDD[(String, String)] = {
+    val commentsRemoved: RDD[(String, String)] = zipStreamToText.mapValues{fileContent =>
+      val reader:Reader = new StringReader(fileContent)
+      val writer: StringWriter = new StringWriter()
+      val jcr: JavaCommentsRemover = new JavaCommentsRemover(reader,writer)
+      val codeWithOutComments: String = jcr.process()
+      regexSpecialChars.replaceAllIn(codeWithOutComments, " ")/* 'commentsRemoved' represents content of a'.java' file
+      without any comments and all occurences of 'regexSpecialChars' are replaced by " ", using 'replaceAllIn' method
+      of scala's regex utility */
+    }
+    commentsRemoved   
+  }
+
+  /* In step this cleaned text is splitted into list of words. And reserved words are removed from the list of words*/
+  def extractIdentifierCountPairs(codeDataWithOutComments: RDD[(String, String)],reserveWords: Broadcast[List[String]]) 
+  : RDD[(String, List[String])] = {
+    val identifiersForEachDocument: RDD[(String, List[String])] = codeDataWithOutComments.mapValues{inp =>
+      val listOfWords: List[String] = inp.split("\\s+").toList.filter(x => x != "") /* Text 'inp' is splitted into list of words and
+      stored in listOfWords'*/
+      val allReserveWords: List[String] = reserveWords.value /* Broadcasted listed of reserve words are accessed and stored in
+      'allReserveWords' */
+      val removeReserveWords: ListBuffer[String] =  new ListBuffer[String]()/* 'removeReserveWords' is list buffer to strings */
+      for(word <- listOfWords if !allReserveWords.contains(word)) removeReserveWords+=word.toLowerCase
+      /* words other than reserve words are appended to 'removeReserveWords'*/
+      // for(word <- listOfWords if !allReserveWords.contains(word)) {
+      //   val cc:CamelCase = new CamelCase()
+      //   val words: Array[String] = cc.splitCamelCase(word).split(" ")
+      //   for(w <- words) {
+      //     removeReserveWords+=w.topLowerCase
+      //     /* words other than reserve words are appended to 'removeReserveWords'*/
+      //   }
+      // }
+      val bagOfWords:List[String] = removeReserveWords.toList.sorted/* 'bagOfWords' contains sorted list of identifiers from a
+      '.java'*/
+      bagOfWords
+    }
+    identifiersForEachDocument 
+  }
+
   /* FUNCTION TO COMPUTE INVERSE DCOUMENT FREQUENCIES*/
   def inverseDocumentFrequencies(docFreqs: Array[(String, Int)], numDocs: Long)
     : Array[(String, Double)] = {
@@ -476,7 +478,7 @@ object LsaApp extends Logger {
     val allReserveWords: List[String] = reserveWords.value /* Broadcasted listed of reserve words are accessed and stored in
       'allReserveWords' */
     val removeReserveWords: ListBuffer[String] =  new ListBuffer[String]()  /* 'removeReserveWords' is list buffer to strings */
-    for(word <- listOfWords if !allReserveWords.contains(word)) removeReserveWords+=word
+    for(word <- listOfWords if !allReserveWords.contains(word)) removeReserveWords+=word.toLowerCase
     /* words other than reserve words are appended to 'removeReserveWords'*/
     // for(word <- listOfWords if !allReserveWords.contains(word)) {
     //   val cc:CamelCase = new CamelCase()
