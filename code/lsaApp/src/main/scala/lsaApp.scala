@@ -22,6 +22,7 @@ import java.util.zip.ZipInputStream
 import java.io._
 
 import scala.Predef
+import scala.annotation.switch
 import scala.collection.immutable
 import scala.util.matching.Regex
 import scala.collection.mutable.ListBuffer
@@ -224,61 +225,52 @@ object LsaApp extends Logger {
       println()
     }
 
-    println("Enter a path to a repo to find similar repos:")
     breakable {
-      for (doc <- Source.stdin.getLines) {
-        if(doc.toString == "break")
-          break
-        println("Top documents for "+doc+" are:")
-        topDocsForNewDoc(normalizedUS, svd.V, vocabulary, idfsMap, docIds, doc.toString, numTopDocs, bidfs, termList, reserveWords)
-        println("Enter a path to a repo to find similar repos:")
+      while(true) {
+        println("Enter one of the following options:")
+        println("new-doc : To find similar repos to a new repo")
+        println("doc-doc : To find most similar repos to a repo in trained dataset")
+        println("term-term : To find most similar terms to a term")
+        println("term-doc: To find most similar repos to a term")
+        println("terms-doc: To find most similar repos to a set of terms")
+        println("exit : To exit the application")
+        var i = readLine()
+        val x = (i: @switch) match {
+            case "new-doc"  => {
+              println("Enter a path to a repo to find similar repos:")
+              val input = readLine()
+              println("Top documents for "+input+" are:")
+              topDocsForNewDoc(normalizedUS, svd.V, vocabulary, idfsMap, docIds, input.toString, numTopDocs, bidfs, termList, reserveWords)
+            }
+            case "doc-doc" => {
+              println("Enter a repo to find similar repos:")
+              val input = readLine()
+              println("Top documents for "+input+" are:")
+              printTopDocsForDoc(normalizedUS, input.toString, idDocs, docIds, numTopDocs)
+            }
+            case "term-term" => {
+              println("Enter a term to find similar terms:")
+              val input = readLine()
+              println("Top terms for "+input+" are:")
+              printRelevantTerms(input.toString, normalizedVS, vocabulary, termIds)
+            }
+            case "term-doc"  => {
+              println("Enter a terms to find repos containing it:")
+              val input = readLine()
+              println("Top documents contianing "+input+":")
+              printTopDocsForTerm(normalizedUS, svd.V, input.toString, vocabulary, docIds, numTopDocs)
+            }
+            case "terms-doc" => {
+              println("Enter set of terms to find repos containing it:")
+              val input = readLine()
+              println("Top documents contianing "+input+":")
+              val termSeq = input.toString.split(",").toSeq
+              printRelevantDocs(normalizedUS, svd.V, termSeq, vocabulary, idfsMap, docIds, numTopDocs)
+            }
+            case "exit" => break
+          }
+        }
       }
-    }
-
-    println("Enter a repo to find similar repos:")
-    breakable {
-      for (doc <- Source.stdin.getLines) {
-        if(doc.toString == "break")
-          break
-        println("Top documents for "+doc+" are:")
-        printTopDocsForDoc(normalizedUS, doc.toString, idDocs, docIds, numTopDocs)
-        println("Enter a repo to find similar repos:")
-      }
-    }
-
-    println("Enter a term to find similar terms:")
-    breakable {
-      for (term <- Source.stdin.getLines) {
-        if(term.toString == "break")
-          break
-        println("Top terms for "+term+" are:")
-        printRelevantTerms(term.toString, normalizedVS, vocabulary, termIds)
-        println("Enter a term to find similar terms:")
-      }
-    }
-
-    println("Enter a term to find repos containing it:")
-    breakable {
-      for (term <- Source.stdin.getLines) {
-        if(term.toString == "break")
-          break
-        println("Top documents contianing "+term+":")
-        printTopDocsForTerm(normalizedUS, svd.V, term.toString, vocabulary, docIds, numTopDocs)
-        println("Enter a terms to find repos containing it:")
-      }
-    }
-
-    println("Enter set of term to find repos containing it:")
-    breakable {
-      for (term <- Source.stdin.getLines) {
-        if(term.toString == "break")
-          break
-        println("Top documents contianing "+term+":")
-        val termSeq = term.toString.split(",").toSeq
-        printRelevantDocs(normalizedUS, svd.V, termSeq, vocabulary, idfsMap, docIds, numTopDocs)
-        println("Enter set of terms to find repos containing it:")
-      }
-    }
     
 /*********************************************CONSOLE PRINTING ENDS HERE***********************************************/
 
