@@ -52,7 +52,7 @@ object LsaApp extends Logger {
 
     val dataFiles: String = if (args.length > 5) args(5).toString else "Data/sampleJava"
     /* 'dataFiles' implies path of the directory where data resides */
-  /******************************************** INITIALIZATION STARTS HERE********************************************/
+  /******************************************** INITIALIZATION STARTS HERE******************************************/
     /* 'keywords' is list of all reserve words in java programming language*/
     var a: Char = readChar()
     val keywords: List[String] = List("abstract", "continue", "for", "new", "switch", "assert", "default", "goto", "package",
@@ -71,17 +71,15 @@ object LsaApp extends Logger {
      and 'fileContent are strings. 'codeData' is cached to avoid memoery overhead */
     //codeData.persist(StorageLevel.MEMORY_AND_DISK)
     val reserveWords: Broadcast[List[String]] = sc.broadcast(keywords) /* Broadcasting reserve words to be used during data parsing*/
-  /********************************************** INITIALIZATION ENDS HERE*********************************************/
+  /********************************************** INITIALIZATION ENDS HERE*******************************************/
 
 /**********************************************DATA PARSING STARTS HERE**********************************************/  
-    val regexToRemovePath: Regex = """.*\/""".r
-    val regexSpecialChars: Regex = """[^a-zA-Z\s]""".r/* 'regexSpecialchars' represents a pattern for special characters*/
-    val zipStreamToText : RDD[(String, String)] = zipToText(codeData,regexToRemovePath)
-    val codeDataWithOutComments: RDD[(String, String)] = removeJavaComments(zipStreamToText,regexSpecialChars)
+    val zipStreamToText : RDD[(String, String)] = zipToText(codeData)
+    val codeDataWithOutComments: RDD[(String, String)] = removeJavaComments(zipStreamToText)
     val identifiersForEachDocument: RDD[(String, List[String])] = extractIdentifierCountPairs(codeDataWithOutComments,reserveWords)    
 /*************************************************DATA PARSING ENDS HERE*********************************************/
 
-/************************************************TERM FREQUENCIES STARTS HERE******************************************/
+/************************************************TERM FREQUENCIES STARTS HERE****************************************/
      /* Computing term-document frequencies for each document*/
     val termDocumentFrequencies: RDD[(String, Predef.Map[String, Int])] = identifiersForEachDocument.mapValues{inp =>
         inp.groupBy(x => x).mapValues(_.size)/* Grouping based on uniqueness and computing size of each group
@@ -93,11 +91,11 @@ object LsaApp extends Logger {
     val idDocs: Predef.Map[String, Long] = termDocumentFrequencies.map(_._1).zipWithUniqueId().collectAsMap().toMap
     val docIds: Predef.Map[Long, String] = idDocs.map(_.swap)
     /* Documents names are associated to unique ids */
-/***********************************************TERM FREQUENCIES ENDS HERE*********************************************/
+/***********************************************TERM FREQUENCIES ENDS HERE*******************************************/
 
 
 
-  /*******************************************DOCUMENT FREQUENCIES STARTS HERE*****************************************/
+  /*******************************************DOCUMENT FREQUENCIES STARTS HERE***************************************/
     /* In this step, document frequiencies for all the identifiers are calculated using flattening all identifier list
     across all documents. Firstly, sorted list of identifiers is grouped based on uniqueness inorder to calculate
     (identifier, count) pairs. Secondly, each (identifier, count) pair is mapped to  (identifier, 1). Now each
@@ -125,8 +123,6 @@ object LsaApp extends Logger {
     docFreqs.unpersist()
 /*******************************************DOCUMENT FREQUENCIES ENDS HERE*********************************************/
 
-
-
    
 /**********************************************TFIDF COMPUTATION STARTS HERE*******************************************/
     /* Computing tfidf from term frequencies and Inverse document frequencies */
@@ -144,14 +140,16 @@ object LsaApp extends Logger {
       val tfidfSeq: Seq[(Int, Double)] = tfidfMap.toSeq/* Converting 'tfidfMap' map to a sequence */
       Vectors.sparse(sizeOfVector, tfidfSeq) /*Obtaining sparse vector from 'tfidfSeq' sequence and 'sizeOfVector'*/
     }
-    tfidf.persist(StorageLevel.MEMORY_AND_DISK)/* RDD 'tfidf' is persisted in the memory as two or more 
-    operations are performed while computing row matrix*/
-    tfidf.count() /* Action is performed on tfidf vector in order to evaluate tfidf as it is needed in next step */
+
+    tfidf.persist(StorageLevel.MEMORY_AND_DISK)
+    /* RDD 'tfidf' is persisted in the memory as two or more operations are performed while computing row matrix*/
+    tfidf.count()
+    /* Action is performed on tfidf vector in order to evaluate tfidf as it is needed in next step */
 
 /**********************************************TFIDF COMPUTATION ENDS HERE*********************************************/
 
 
-/**********************************************MATRIX COMPUTATION STARTS HERE*********************************************/
+/**********************************************MATRIX COMPUTATION STARTS HERE******************************************/
     /* Constructing sparse matrix from tfidf sparse vectors obtained in the previous step*/
     termDocumentFrequencies.unpersist()
     val mat: RowMatrix = new RowMatrix(tfidf.values)
@@ -170,8 +168,8 @@ object LsaApp extends Logger {
 
     val VS: BDenseMatrix[Double] = multiplyByDiagonalMatrix(svd.V, svd.s)
     val normalizedVS: BDenseMatrix[Double] = rowsNormalized(VS)
-/**********************************************MATRIX COMPUTATION ENDS HERE***********************************************/
-   
+/**********************************************MATRIX COMPUTATION ENDS HERE********************************************/
+
 
 /*******************************************CONSOLE PRINTING STARTS HERE***********************************************/
     println("********************************Number of Documents: " +numDocs +" **************************************")
@@ -181,13 +179,12 @@ object LsaApp extends Logger {
     println("*************************************** LIST OF WORDS ***************************************************")
     println("**************************************FILTERED DOCUMET FREQUENCIES ************************************")
     featureVector.foreach(println)
-
     println("************************************************SVD computed*********************************************")
     println("Singular values: " + svd.s)
 
     println("Number of rows: "+m+ " " + "Number of Columns: "+n)
     println("**********************************************Doc Ids****************************************************")
-      docIds.take(10).foreach(println)
+    docIds.take(10).foreach(println)
         
     for ((terms, docs) <- topConceptTerms.zip(topConceptDocs)) {
       println("Concept terms: " + terms.map(_._1).mkString(", ")  )
@@ -242,13 +239,14 @@ object LsaApp extends Logger {
             case "exit" => break
           }
         }
-      }    
+      }
 /*********************************************CONSOLE PRINTING ENDS HERE***********************************************/
   }
 
-  def zipToText(codeData:RDD[(String, PortableDataStream)],regexToRemovePath: Regex): RDD[(String, String)] = {
+  def zipToText(codeData:RDD[(String, PortableDataStream)]): RDD[(String, String)] = {
     val zipStreamToText : RDD[(String, String)] = codeData.map{
       case(fileName, zipStream) =>
+        val regexToRemovePath: Regex = """.*\/""".r
         val zipInputStream: DataInputStream = zipStream.open()
         val (fileContent,count) = ZipBasicParser.readFilesAndPackages(new ZipInputStream(zipInputStream))
         println(fileName +":"+count)
@@ -260,43 +258,51 @@ object LsaApp extends Logger {
   }
 
   /* Method 'removeJavaComments' removes all comments and special characters from each '.java' file*/
-  def removeJavaComments(zipStreamToText : RDD[(String, String)],regexSpecialChars: Regex) : RDD[(String, String)] = {
+  def removeJavaComments(zipStreamToText : RDD[(String, String)]) : RDD[(String, String)] = {
     val commentsRemoved: RDD[(String, String)] = zipStreamToText.mapValues{fileContent =>
-      val reader:Reader = new StringReader(fileContent)
-      val writer: StringWriter = new StringWriter()
-      val jcr: JavaCommentsRemover = new JavaCommentsRemover(reader,writer)
-      val codeWithOutComments: String = jcr.process()
-      regexSpecialChars.replaceAllIn(codeWithOutComments, " ")/* 'commentsRemoved' represents content of a'.java' file
-      without any comments and all occurences of 'regexSpecialChars' are replaced by " ", using 'replaceAllIn' method
-      of scala's regex utility */
+      removeCommentsAndSpecilChars(fileContent)  
     }
     commentsRemoved   
+  }
+
+  def removeCommentsAndSpecilChars(fileContent:String) : String = {
+    val regexSpecialChars: Regex = """[^a-zA-Z\s]""".r
+    /* 'regexSpecialchars' represents a pattern for special characters*/
+    val reader:Reader = new StringReader(fileContent)
+    val writer: StringWriter = new StringWriter()
+    val jcr: JavaCommentsRemover = new JavaCommentsRemover(reader,writer)
+    val codeWithOutComments: String = jcr.process()
+    regexSpecialChars.replaceAllIn(codeWithOutComments, " ")/* 'commentsRemoved' represents content of a'.java' file
+      without any comments and all occurences of 'regexSpecialChars' are replaced by " ", using 'replaceAllIn' method
+      of scala's regex utility */
   }
 
   /* In step this cleaned text is splitted into list of words. And reserved words are removed from the list of words*/
   def extractIdentifierCountPairs(codeDataWithOutComments: RDD[(String, String)],reserveWords: Broadcast[List[String]]) 
   : RDD[(String, List[String])] = {
-    val identifiersForEachDocument: RDD[(String, List[String])] = codeDataWithOutComments.mapValues{inp =>
-      val listOfWords: List[String] = inp.split("\\s+").toList.filter(x => x != "") /* Text 'inp' is splitted into list of words and
-      stored in listOfWords'*/
-      val allReserveWords: List[String] = reserveWords.value /* Broadcasted listed of reserve words are accessed and stored in
-      'allReserveWords' */
-      val removeReserveWords: ListBuffer[String] =  new ListBuffer[String]()/* 'removeReserveWords' is list buffer to strings */
-      for(word <- listOfWords if !allReserveWords.contains(word)) removeReserveWords+=word.toLowerCase
-      /* words other than reserve words are appended to 'removeReserveWords'*/
-      // for(word <- listOfWords if !allReserveWords.contains(word)) {
-      //   val cc:CamelCase = new CamelCase()
-      //   val words: Array[String] = cc.splitCamelCase(word).split(" ")
-      //   for(w <- words) {
-      //     removeReserveWords+=w.topLowerCase
-      //     /* words other than reserve words are appended to 'removeReserveWords'*/
-      //   }
-      // }
-      val bagOfWords:List[String] = removeReserveWords.toList.sorted/* 'bagOfWords' contains sorted list of identifiers from a
-      '.java'*/
-      bagOfWords
+    val identifiersForEachDocument: RDD[(String, List[String])] = codeDataWithOutComments.mapValues{codeWithOutComments =>
+      extractBagOfWords(codeWithOutComments,reserveWords)
     }
-    identifiersForEachDocument 
+    identifiersForEachDocument
+  }
+
+  def extractBagOfWords(codeWithOutComments: String,reserveWords: Broadcast[List[String]]) : List[String] = {
+    val listOfWords: List[String] = codeWithOutComments.split("\\s+").toList.filter(x => x != "") 
+    /* Text 'inp' is splitted into list of words and stored in listOfWords'*/
+    val allReserveWords: List[String] = reserveWords.value 
+    /* Broadcasted listed of reserve words are accessed and stored in 'allReserveWords' */
+    val removeReserveWords: ListBuffer[String] =  new ListBuffer[String]()/* 'removeReserveWords' is list buffer to strings */
+    for(word <- listOfWords if !allReserveWords.contains(word)) convertToCamelCase(word).foreach(removeReserveWords+=_)
+    /* words other than reserve words are appended to 'removeReserveWords'*/
+    val bagOfWords:List[String] = removeReserveWords.toList.sorted
+    /* 'bagOfWords' contains sorted list of identifiers from a '.java'*/
+    bagOfWords
+  }
+
+  def convertToCamelCase(word:String) : List[String] = {
+    val cc:CamelCase = new CamelCase()
+    val words: List[String] = cc.splitCamelCase(word).split(" ").toList.map(_.toLowerCase)
+    words
   }
 
   /* FUNCTION TO COMPUTE INVERSE DCOUMENT FREQUENCIES*/
@@ -427,31 +433,10 @@ object LsaApp extends Logger {
     val zipIn:ZipInputStream = new ZipInputStream(zipFile)
     val (fileContent,count) = ZipBasicParser.readFilesAndPackages(zipIn)
 
-    val reader:Reader = new StringReader(fileContent)
-    val writer: StringWriter = new StringWriter()
-    val jcr: JavaCommentsRemover = new JavaCommentsRemover(reader,writer)
-    val codeWithOutComments = jcr.process()
+    val lines = removeCommentsAndSpecilChars(fileContent)
 
-    val regexSpecialChars: Regex = """[^a-zA-Z\s]""".r
-    val lines = regexSpecialChars.replaceAllIn(fileContent, " ")
+    val bagOfWords = extractBagOfWords(lines,reserveWords)
 
-    val listOfWords: List[String] = lines.split("\\s+").toList.filter(x => x != "") /* Text 'inp' is splitted into list of words and
-      stored in listOfWords'*/
-    val allReserveWords: List[String] = reserveWords.value /* Broadcasted listed of reserve words are accessed and stored in
-      'allReserveWords' */
-    val removeReserveWords: ListBuffer[String] =  new ListBuffer[String]()  /* 'removeReserveWords' is list buffer to strings */
-    for(word <- listOfWords if !allReserveWords.contains(word)) removeReserveWords+=word.toLowerCase
-    /* words other than reserve words are appended to 'removeReserveWords'*/
-    // for(word <- listOfWords if !allReserveWords.contains(word)) {
-    //   val cc:CamelCase = new CamelCase()
-    //   val words = cc.splitCamelCase(word).split(" ")
-    //   for(w <- words) {
-    //     removeReserveWords+= w.toLowerCase
-    //     /* words other than reserve words are appended to 'removeReserveWords'*/
-    //   }
-    // }
-    val bagOfWords:List[String] = removeReserveWords.toList.sorted/* 'bagOfWords' contains sorted list of identifiers from a
-      '.java'*/
     val pairs: Predef.Map[String, Int] = bagOfWords.groupBy(x => x).mapValues(_.size)
 
     val idf: Predef.Map[String, Double] = bidfs.value/* Locally obtaining broadcasted bidfs values */
@@ -468,7 +453,6 @@ object LsaApp extends Logger {
     }
     val termSeq: immutable.Seq[String] = termSequence.toList.toSeq
     printRelevantDocs(normalizedUS, V, termSeq, idTerms, tfidfMap, docIds, numTopDocs)
-    // val tfidfValues = tfidfMap.values.toArray
   }
 
   def printIdWeights[T](idWeights: Seq[(Double, T)], entityIds: Map[T, String]) {
