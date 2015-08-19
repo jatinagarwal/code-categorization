@@ -73,30 +73,23 @@ object LsaApp extends Logger {
     val reserveWords: Broadcast[List[String]] = sc.broadcast(keywords) /* Broadcasting reserve words to be used during data parsing*/
   /********************************************** INITIALIZATION ENDS HERE*********************************************/
 
-
-  /*******************************************************************************************************************/
-  val regexToRemovePath: Regex = """.*\/""".r
-  val regexSpecialChars: Regex = """[^a-zA-Z\s]""".r/* 'regexSpecialchars' represents a pattern for special characters*/
-  val zipStreamToText : RDD[(String, String)] = zipToText(codeData,regexToRemovePath)
-  val codeDataWithOutComments: RDD[(String, String)] = removeJavaComments(zipStreamToText,regexSpecialChars)
-  val identifiersForEachDocument: RDD[(String, List[String])] = extractIdentifierCountPairs(codeDataWithOutComments,reserveWords)
-  /*******************************************************************************************************************/
-
-  /**********************************************DATA PARSING STARTS HERE**********************************************/  
-    
-    
-  /*************************************************DATA PARSING ENDS HERE*********************************************/
+/**********************************************DATA PARSING STARTS HERE**********************************************/  
+    val regexToRemovePath: Regex = """.*\/""".r
+    val regexSpecialChars: Regex = """[^a-zA-Z\s]""".r/* 'regexSpecialchars' represents a pattern for special characters*/
+    val zipStreamToText : RDD[(String, String)] = zipToText(codeData,regexToRemovePath)
+    val codeDataWithOutComments: RDD[(String, String)] = removeJavaComments(zipStreamToText,regexSpecialChars)
+    val identifiersForEachDocument: RDD[(String, List[String])] = extractIdentifierCountPairs(codeDataWithOutComments,reserveWords)    
+/*************************************************DATA PARSING ENDS HERE*********************************************/
 
 /************************************************TERM FREQUENCIES STARTS HERE******************************************/
      /* Computing term-document frequencies for each document*/
     val termDocumentFrequencies: RDD[(String, Predef.Map[String, Int])] = identifiersForEachDocument.mapValues{inp =>
-      inp.groupBy(x => x).mapValues(_.size)/* Grouping based on uniqueness and computing size of each group
-      to obtain (identifier,count) pairs */
-    } 
+        inp.groupBy(x => x).mapValues(_.size)/* Grouping based on uniqueness and computing size of each group
+        to obtain (identifier,count) pairs */
+    }   
     termDocumentFrequencies.persist(StorageLevel.MEMORY_AND_DISK)
-   /* RDD 'termDocumentFrequencies' is persisted in the memory as two or more transformation are performed on it*/
+     /* RDD 'termDocumentFrequencies' is persisted in the memory as two or more transformation are performed on it*/
     val numDocs: Long = termDocumentFrequencies.count() /*Computing number of documents*/
-
     val idDocs: Predef.Map[String, Long] = termDocumentFrequencies.map(_._1).zipWithUniqueId().collectAsMap().toMap
     val docIds: Predef.Map[Long, String] = idDocs.map(_.swap)
     /* Documents names are associated to unique ids */
@@ -112,11 +105,8 @@ object LsaApp extends Logger {
      identifier across all the documents*/
     val documentFrequencies: RDD[(String, Int)] = termDocumentFrequencies.flatMapValues(inp =>
       inp).values.mapValues{inp => 1}.reduceByKey((x,y) => x+y)
-    /* In above step document frequencies are calculated for the terms across all the documents*/
-  
+    /* In above step document frequencies are calculated for the terms across all the documents*/  
     // val docFreqs = documentFrequencies.collect().sortBy(- _._2)    
-
-    
     val docFreqs: RDD[(String, Int)] = documentFrequencies.filter{ case(identifier,count) => count >1 && count <= numDocs/5}.map{case(id,c) =>
       (-c,id)}.sortByKey().map{case(c,id) => (id,-c)}
     /* Filtering (identifier, df) pairs from 'documentFrequencies' based on optimization specified in paper*/
@@ -157,23 +147,19 @@ object LsaApp extends Logger {
     tfidf.persist(StorageLevel.MEMORY_AND_DISK)/* RDD 'tfidf' is persisted in the memory as two or more 
     operations are performed while computing row matrix*/
     tfidf.count() /* Action is performed on tfidf vector in order to evaluate tfidf as it is needed in next step */
-   
+
 /**********************************************TFIDF COMPUTATION ENDS HERE*********************************************/
-  
 
 
-/**********************************************SVD COMPUTATION STARTS HERE*********************************************/
+/**********************************************MATRIX COMPUTATION STARTS HERE*********************************************/
     /* Constructing sparse matrix from tfidf sparse vectors obtained in the previous step*/
     termDocumentFrequencies.unpersist()
     val mat: RowMatrix = new RowMatrix(tfidf.values)
-
     val m: Long = mat.numRows /* Number of rows in a matrix */
-    val n: Long = mat.numCols /* Number of columns in a matrix */
-    
-
+    val n: Long = mat.numCols /* Number of columns in a matrix */  
     /* Computing svd from the 'mat' to obtain matrices*/
     val svd: SingularValueDecomposition[RowMatrix, Matrix] = mat.computeSVD(k, computeU=true)
-/**********************************************SVD COMPUTATION ENDS HERE***********************************************/
+
     /* Extracts top terms from top most concepts */
     val topConceptTerms: Seq[Seq[(String, Double)]] = topTermsInTopConcepts(svd, numTopConcepts, numTopTerms, termIds)
     /* Extracts top documents from top most concepts */
@@ -184,31 +170,17 @@ object LsaApp extends Logger {
 
     val VS: BDenseMatrix[Double] = multiplyByDiagonalMatrix(svd.V, svd.s)
     val normalizedVS: BDenseMatrix[Double] = rowsNormalized(VS)
+/**********************************************MATRIX COMPUTATION ENDS HERE***********************************************/
+   
+
 /*******************************************CONSOLE PRINTING STARTS HERE***********************************************/
     println("********************************Number of Documents: " +numDocs +" **************************************")
     println("**************************Size of Feature Vector: " +featureVectorSize +" *******************************")
     // println("***********************************Total terms ***************************: "+ documentFrequencies.count())
     println("****************************Number of Terms after filtering: " +numTerms+" ***********************")
     println("*************************************** LIST OF WORDS ***************************************************")
-//    identifiersForEachDocument.take(2).foreach(println)
-//
-//    println("*******************************Number of documents*********************"+termDocumentFrequencies.count())
-//    println("************************************TERM DOCUMENT FREQUENCIES *****************************************")
-//    termDocumentFrequencies.values.foreach(println)
-//
-//    println("*********************************************** VOCABULARY ********************************************")
-//    vocabulary.foreach(println)
-//
-//    println("*********************************************** TERM IDS **********************************************")
-//    termIds.foreach(println)
-//
-//    println("***************************************** DOCUMET FREQUENCIES *****************************************")
-//    documentFrequencies.foreach(println)
-   println("**************************************FILTERED DOCUMET FREQUENCIES ************************************")
-   featureVector.foreach(println)
-//
-//    println("***************************************** TFIDF VECTORS ***********************************************")
-//    tfidf.values.take(10).foreach(println)
+    println("**************************************FILTERED DOCUMET FREQUENCIES ************************************")
+    featureVector.foreach(println)
 
     println("************************************************SVD computed*********************************************")
     println("Singular values: " + svd.s)
@@ -270,10 +242,8 @@ object LsaApp extends Logger {
             case "exit" => break
           }
         }
-      }
-    
+      }    
 /*********************************************CONSOLE PRINTING ENDS HERE***********************************************/
-
   }
 
   def zipToText(codeData:RDD[(String, PortableDataStream)],regexToRemovePath: Regex): RDD[(String, String)] = {
