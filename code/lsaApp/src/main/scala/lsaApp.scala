@@ -47,10 +47,13 @@ object LsaApp extends Logger {
     val numTopDocs: Int = if (args.length > 3) args(3).toInt else 10
     /* 'numTopDocs' is the number of top docs in a concept. If not passed then by default it is set to 10 */
 
-     val featureVectorPercent = if (args.length > 4) args(4).toDouble else 1.0
+    val documentFrequencySize = if (args.length > 4) args(4).toInt else 50
     /* 'featureVectorPercent' is the percentage of terms with top document frequencies feature vector*/
 
-    val dataFiles: String = if (args.length > 5) args(5).toString else "Data/sampleJava"
+    val featureVectorPercent = if (args.length > 5) args(5).toDouble else 1.0
+    /* 'featureVectorPercent' is the percentage of terms with top document frequencies feature vector*/
+
+    val dataFiles: String = if (args.length > 6) args(6).toString else "Data/sampleJava"
     /* 'dataFiles' implies path of the directory where data resides */
   /******************************************** INITIALIZATION STARTS HERE******************************************/
     /* 'keywords' is list of all reserve words in java programming language*/
@@ -105,7 +108,7 @@ object LsaApp extends Logger {
       inp).values.mapValues{inp => 1}.reduceByKey((x,y) => x+y)
     /* In above step document frequencies are calculated for the terms across all the documents*/  
     // val docFreqs = documentFrequencies.collect().sortBy(- _._2)    
-    val docFreqs: RDD[(String, Int)] = documentFrequencies.filter{ case(identifier,count) => count >1 && count <= numDocs/5}.map{case(id,c) =>
+    val docFreqs: RDD[(String, Int)] = documentFrequencies.filter{ case(identifier,count) => count >1 && count <= documentFrequencySize}.map{case(id,c) =>
       (-c,id)}.sortByKey().map{case(c,id) => (id,-c)}
     /* Filtering (identifier, df) pairs from 'documentFrequencies' based on optimization specified in paper*/
     docFreqs.persist(StorageLevel.MEMORY_AND_DISK)
@@ -204,40 +207,46 @@ object LsaApp extends Logger {
         println("terms-doc: To find most similar repos to a set of terms")
         println("exit : To exit the application")
         var i = readLine()
-        val x = (i: @switch) match {
-            case "new-doc"  => {
-              println("Enter a path to a repo to find similar repos:")
-              val input = readLine()
-              println("Top documents for "+input+" are:")
-              topDocsForNewDoc(normalizedUS, svd.V, vocabulary, idfsMap, docIds, input.toString, numTopDocs, bidfs, termList, reserveWords)
+        try {  
+          val x = (i: @switch) match {
+              case "new-doc"  => {
+                println("Enter a path to a repo to find similar repos:")
+                val input = readLine()
+                println("Top documents for "+input+" are:")
+                topDocsForNewDoc(normalizedUS, svd.V, vocabulary, idfsMap, docIds, input.toString, numTopDocs, bidfs, termList, reserveWords)
+              }
+              case "doc-doc" => {
+                println("Enter a repo to find similar repos:")
+                val input = readLine()
+                println("Top documents for "+input+" are:")
+                printTopDocsForDoc(normalizedUS, input.toString, idDocs, docIds, numTopDocs)
+              }
+              case "term-term" => {
+                println("Enter a term to find similar terms:")
+                val input = readLine()
+                println("Top terms for "+input+" are:")
+                printRelevantTerms(input.toString, normalizedVS, vocabulary, termIds)
+              }
+              case "term-doc"  => {
+                println("Enter a terms to find repos containing it:")
+                val input = readLine()
+                println("Top documents contianing "+input+":")
+                printTopDocsForTerm(normalizedUS, svd.V, input.toString, vocabulary, docIds, numTopDocs)
+              }
+              case "terms-doc" => {
+                println("Enter set of terms to find repos containing it:")
+                val input = readLine()
+                println("Top documents contianing "+input+":")
+                val termSeq = input.toString.split(",").toSeq
+                printRelevantDocs(normalizedUS, svd.V, termSeq, vocabulary, idfsMap, docIds, numTopDocs)
+              }
+              case "exit" => break
             }
-            case "doc-doc" => {
-              println("Enter a repo to find similar repos:")
-              val input = readLine()
-              println("Top documents for "+input+" are:")
-              printTopDocsForDoc(normalizedUS, input.toString, idDocs, docIds, numTopDocs)
-            }
-            case "term-term" => {
-              println("Enter a term to find similar terms:")
-              val input = readLine()
-              println("Top terms for "+input+" are:")
-              printRelevantTerms(input.toString, normalizedVS, vocabulary, termIds)
-            }
-            case "term-doc"  => {
-              println("Enter a terms to find repos containing it:")
-              val input = readLine()
-              println("Top documents contianing "+input+":")
-              printTopDocsForTerm(normalizedUS, svd.V, input.toString, vocabulary, docIds, numTopDocs)
-            }
-            case "terms-doc" => {
-              println("Enter set of terms to find repos containing it:")
-              val input = readLine()
-              println("Top documents contianing "+input+":")
-              val termSeq = input.toString.split(",").toSeq
-              printRelevantDocs(normalizedUS, svd.V, termSeq, vocabulary, idfsMap, docIds, numTopDocs)
-            }
-            case "exit" => break
           }
+          catch {
+            case ex: Exception => log.error("Exception match not found {}", ex)
+            println("Match not found. Enter another option")  
+          }  
         }
       }
 /*********************************************CONSOLE PRINTING ENDS HERE***********************************************/
@@ -260,7 +269,7 @@ object LsaApp extends Logger {
   /* Method 'removeJavaComments' removes all comments and special characters from each '.java' file*/
   def removeJavaComments(zipStreamToText : RDD[(String, String)]) : RDD[(String, String)] = {
     val commentsRemoved: RDD[(String, String)] = zipStreamToText.mapValues{fileContent =>
-      removeCommentsAndSpecilChars(fileContent)  
+      removeCommentsAndSpecilChars(fileContent)
     }
     commentsRemoved   
   }
