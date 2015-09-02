@@ -79,21 +79,22 @@ object LsaApp extends Logger {
 /**********************************************DATA PARSING STARTS HERE**********************************************/  
     val zipStreamToText : RDD[(String, String)] = zipToText(codeData)
     val codeDataWithOutComments: RDD[(String, String)] = removeJavaComments(zipStreamToText)
-    val identifiersForEachDocument: RDD[(String, List[String])] = extractIdentifierCountPairs(codeDataWithOutComments,reserveWords)    
+    val identifiersForEachDocument: RDD[(String, List[String])] = extractIdentifierCountPairs(codeDataWithOutComments,reserveWords)
 /*************************************************DATA PARSING ENDS HERE*********************************************/
 
 /************************************************TERM FREQUENCIES STARTS HERE****************************************/
      /* Computing term-document frequencies for each document*/
     val termDocumentFrequencies: RDD[(String, Predef.Map[String, Int])] = identifiersForEachDocument.mapValues{inp =>
-        inp.groupBy(x => x).mapValues(_.size)/* Grouping based on uniqueness and computing size of each group
-        to obtain (identifier,count) pairs */
-    }   
+        val identifierCountPairs: Predef.Map[String, Int] = inp.groupBy(x => x).mapValues(_.size)
+//        val docTotal = identifierCountPairs.values.sum + 0.0
+//        (docTotal,identifierCountPairs)
+        /* Grouping based on uniqueness and computing size of each group to obtain (identifier,count) pairs */
+        identifierCountPairs
+    }
     termDocumentFrequencies.persist(StorageLevel.MEMORY_AND_DISK)
-     /* RDD 'termDocumentFrequencies' is persisted in the memory as two or more transformation are performed on it*/
     val numDocs: Long = termDocumentFrequencies.count() /*Computing number of documents*/
-    val idDocs: Predef.Map[String, Long] = termDocumentFrequencies.map(_._1).zipWithUniqueId().collectAsMap().toMap
-    val docIds: Predef.Map[Long, String] = idDocs.map(_.swap)
-    /* Documents names are associated to unique ids */
+    /* RDD 'termDocumentFrequencies' is persisted in the memory as two or more transformation are performed on it*/
+
 /***********************************************TERM FREQUENCIES ENDS HERE*******************************************/
 
 
@@ -114,7 +115,7 @@ object LsaApp extends Logger {
     docFreqs.persist(StorageLevel.MEMORY_AND_DISK)
     val numTerms: Long = docFreqs.count()
     /* RDD 'docFreqs' is persisted in the memory as two or more transformation are performed on it*/
-    var featureVectorSize:Int = (numTerms*featureVectorPercent).toInt;
+    var featureVectorSize:Int = (numTerms*featureVectorPercent).toInt
     val featureVector: Array[(String, Int)] = docFreqs.take(featureVectorSize)
     val idfs: Array[(String, Double)] = inverseDocumentFrequencies(featureVector, numDocs)
     /* Computing inverse document frequencies 'idfs' from document frequencies */
@@ -129,26 +130,45 @@ object LsaApp extends Logger {
    
 /**********************************************TFIDF COMPUTATION STARTS HERE*******************************************/
     /* Computing tfidf from term frequencies and Inverse document frequencies */
-    val tfidf: RDD[(String, Vector)] = termDocumentFrequencies.mapValues{termFreqPair =>
-      val idf: Predef.Map[String, Double] = bidfs.value/* Locally obtaining broadcasted bidfs values */
-      val allIdentifiers: Predef.Map[String, Int] = termList.value/* Locally obtaining broadcasted  values */
-      val docTotalTerms: Int = termFreqPair.values.sum
-      val termInThisDocument: List[String] = termFreqPair.keySet.toList/* Obtaining all terms from this document*/
-      val sizeOfVector: Int = allIdentifiers.size/* Computing number of terms(identifiers) across all the documents*/
-      var tfidfMap:Map[Int,Double] = Map()/* Computing a map of (identifier, tfidf) pairs from term-document
-       (identifier, count) pairs and document-frequency (identifier, idfs) pair */
-      for(term <- termInThisDocument if allIdentifiers.contains(term)) {
-        tfidfMap += (allIdentifiers(term) -> termFreqPair(term)*idf(term)/docTotalTerms) /* TFIDF computation */
-      }      
-      val tfidfSeq: Seq[(Int, Double)] = tfidfMap.toSeq/* Converting 'tfidfMap' map to a sequence */
-      Vectors.sparse(sizeOfVector, tfidfSeq) /*Obtaining sparse vector from 'tfidfSeq' sequence and 'sizeOfVector'*/
+//    val tfidf: RDD[(String, Vector)] = termDocumentFrequencies.mapValues{termFreqPair =>
+//      val idf: Predef.Map[String, Double] = bidfs.value/* Locally obtaining broadcasted bidfs values */
+//      val allIdentifiers: Predef.Map[String, Int] = termList.value/* Locally obtaining broadcasted  values */
+//      val docTotalTerms: Int = termFreqPair.values.sum
+//      val termInThisDocument: List[String] = termFreqPair.keySet.toList/* Obtaining all terms from this document*/
+//      val sizeOfVector: Int = allIdentifiers.size/* Computing number of terms(identifiers) across all the documents*/
+//      var tfidfMap:Map[Int,Double] = Map()/* Computing a map of (identifier, tfidf) pairs from term-document
+//       (identifier, count) pairs and document-frequency (identifier, idfs) pair */
+//      for(term <- termInThisDocument if allIdentifiers.contains(term)) {
+//        tfidfMap += (allIdentifiers(term) -> termFreqPair(term)*idf(term)/docTotalTerms) /* TFIDF computation */
+//      }
+//      val tfidfSeq: Seq[(Int, Double)] = tfidfMap.toSeq/* Converting 'tfidfMap' map to a sequence */
+//      Vectors.sparse(sizeOfVector, tfidfSeq) /*Obtaining sparse vector from 'tfidfSeq' sequence and 'sizeOfVector'*/
+//    }
+
+    val tfidf: RDD[(String, Vector)] = termDocumentFrequencies.mapValues{inp =>
+      val docTotal = inp.values.sum + 0.0
+      (docTotal,inp)
+      /* Grouping based on uniqueness and computing size of each group to obtain (identifier,count) pairs */
+    }.flatMap{
+      case(k,v) =>
+        v._2.map(a => (k,a._1,a._2,v._1))
+    }.groupBy(_._2).flatMap(a => a._2.map(b => (b._1, b._2,b._3,b._4,a._2.size))).filter{
+      case(a,b,c,d,e) => e >1 && e <=  documentFrequencySize
+    }.map(b => (b._1,b._2,b._3*math.log(numDocs.toDouble/b._5)/b._4)).groupBy(_._1).map{
+      case(k,v) =>
+        val allIdentifiers: Predef.Map[String, Int] = termList.value
+        val sizeOfVector = allIdentifiers.size
+        val values: Seq[(Int, Double)] = v.map(a => (allIdentifiers(a._2),a._3)).toSeq
+        (k,Vectors.sparse(sizeOfVector, values))
     }
 
     tfidf.persist(StorageLevel.MEMORY_AND_DISK)
     /* RDD 'tfidf' is persisted in the memory as two or more operations are performed while computing row matrix*/
     tfidf.count()
     /* Action is performed on tfidf vector in order to evaluate tfidf as it is needed in next step */
-
+    val idDocs: Predef.Map[String, Long] = tfidf.map(_._1).zipWithUniqueId().collectAsMap().toMap
+    val docIds: Predef.Map[Long, String] = idDocs.map(_.swap)
+    /* Documents names are associated to unique ids */
 /**********************************************TFIDF COMPUTATION ENDS HERE*********************************************/
 
 
