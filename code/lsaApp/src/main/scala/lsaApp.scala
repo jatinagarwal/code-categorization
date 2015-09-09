@@ -24,6 +24,7 @@ import java.io._
 import scala.Predef
 import scala.annotation.switch
 import scala.collection.immutable
+import scala.reflect.ClassTag
 import scala.util.matching.Regex
 import scala.collection.mutable.ListBuffer
 import scala.collection.immutable.Map
@@ -148,7 +149,7 @@ object LsaApp extends Logger {
 //      Vectors.sparse(sizeOfVector, tfidfSeq) /*Obtaining sparse vector from 'tfidfSeq' sequence and 'sizeOfVector'*/
 //    }
 
-    val tfidf: RDD[((String, Long), Iterable[(String, Long, Double)])] = termDocumentFrequencies.mapValues{inp =>
+    val tfidf: RDD[((String, (Long, Int)), Iterable[(String, Long, Int, Double, Int)])] = termDocumentFrequencies.mapValues{inp =>
       val docTotal = inp.values.sum + 0.0
       (docTotal,inp)
       /* Grouping based on uniqueness and computing size of each group to obtain (identifier,count) pairs */
@@ -157,26 +158,28 @@ object LsaApp extends Logger {
         v._2.map(a => (k,a._1,a._2,v._1))
     }.groupBy(_._2).flatMap(a => a._2.map(b => (b._1, b._2,b._3,b._4,a._2.size))).filter{
       case(a,b,c,d,e) => e >= documentFrequencyMinSize && e <= documentFrequencyMaxSize
-    }.map(b => (b._1,b._2,b._3*math.log(numDocs.toDouble/b._5)/b._4)).groupBy(_._2).zipWithIndex.map{
+    }.groupBy(_._2).zipWithIndex.map{
       case(k,v) =>
-        ((k._1,v),k._2.map(c => (c._1,v,c._3)))
+        ((k._1,(v,k._2.map(a => a._5).sum/k._2.size)),k._2.map(c => (c._1,v,c._3,c._4,c._5)))
     }
 
     tfidf.persist(StorageLevel.MEMORY_AND_DISK)
     tfidf.count()
     termDocumentFrequencies.unpersist()
 
-    val vocabulary: RDD[(String, Long)] = tfidf.keys
+    val vocabularyAndDf: RDD[(String, (Long, Int))] = tfidf.keys
+    val vocabulary: RDD[(String, Long)] = vocabularyAndDf.mapValues{inp => inp._1}
     val termIds: RDD[(Long, String)] = vocabulary.map(_.swap)
+    val idfsMap: RDD[(String, Double)] = vocabularyAndDf.mapValues{inp => math.log(numDocs.toDouble/inp._2)}
     termIds.persist(StorageLevel.MEMORY_AND_DISK)
-//    val tfi: RDD[(String, Long, Double)] = idf.flatMap{
+//    val tfi: RDD[(String, Long, Double)] = tfidf.flatMap{
 //      case(k,v) =>
-//        v
+//        v.map(b => (b._1,b._2,b._3*math.log(numDocs.toDouble/b._5)/b._4))
 //    }
     val sizeOfVector: Long = vocabulary.count()
     val tfidfVector: RDD[(String, Vector)] = tfidf.flatMap{
       case(k,v) =>
-        v
+        v.map(b => (b._1,b._2,b._3*math.log(numDocs.toDouble/b._5)/b._4))
     }.groupBy(_._1).map{
       case(k,v) =>
         //val allIdentifiers: Predef.Map[String, Int] = termList.value
@@ -244,58 +247,58 @@ object LsaApp extends Logger {
       println()
     }
 
-//    breakable {
-//      while(true) {
-//        println("Enter one of the following options:")
-//        println("new-doc : To find similar repos to a new repo")
-//        println("doc-doc : To find most similar repos to a repo in trained dataset")
-//        println("term-term : To find most similar terms to a term")
-//        println("term-doc: To find most similar repos to a term")
-//        println("terms-doc: To find most similar repos to a set of terms")
-//        println("exit : To exit the application")
-//        var i = readLine()
-//        try {
-//          val x = (i: @switch) match {
-//              case "new-doc"  => {
-//                println("Enter a path to a repo to find similar repos:")
-//                val input = readLine()
-//                println("Top documents for "+input+" are:")
-//                topDocsForNewDoc(normalizedUS, svd.V, vocabulary, idfsMap, docIds, input.toString, numTopDocs, bidfs, termList, reserveWords)
-//              }
-//              case "doc-doc" => {
-//                println("Enter a repo to find similar repos:")
-//                val input = readLine()
-//                println("Top documents for "+input+" are:")
-//                printTopDocsForDoc(normalizedUS, input.toString, idDocs, docIds, numTopDocs)
-//              }
-//              case "term-term" => {
-//                println("Enter a term to find similar terms:")
-//                val input = readLine()
-//                println("Top terms for "+input+" are:")
-//                printRelevantTerms(input.toString, normalizedVS, vocabulary, termIds)
-//              }
-//              case "term-doc"  => {
-//                println("Enter a terms to find repos containing it:")
-//                val input = readLine()
-//                println("Top documents contianing "+input+":")
-//                printTopDocsForTerm(normalizedUS, svd.V, input.toString, vocabulary, docIds, numTopDocs)
-//              }
-//              case "terms-doc" => {
-//                println("Enter set of terms to find repos containing it:")
-//                val input = readLine()
-//                println("Top documents contianing "+input+":")
-//                val termSeq = input.toString.split(",").toSeq
-//                printRelevantDocs(normalizedUS, svd.V, termSeq, vocabulary, idfsMap, docIds, numTopDocs)
-//              }
-//              case "exit" => break
-//            }
-//          }
-//          catch {
-//            case ex: Exception => log.error("Exception match not found {}", ex)
-//            println("Match not found. Enter another option")
-//          }
-//        }
-//      }
+    breakable {
+      while(true) {
+        println("Enter one of the following options:")
+        println("new-doc : To find similar repos to a new repo")
+        println("doc-doc : To find most similar repos to a repo in trained dataset")
+        println("term-term : To find most similar terms to a term")
+        println("term-doc: To find most similar repos to a term")
+        println("terms-doc: To find most similar repos to a set of terms")
+        println("exit : To exit the application")
+        var i = readLine()
+        try {
+          val x = (i: @switch) match {
+              case "new-doc"  => {
+                println("Enter a path to a repo to find similar repos:")
+                val input = readLine()
+                println("Top documents for "+input+" are:")
+                topDocsForNewDoc(normalizedUS, svd.V, vocabulary, idfsMap, docIds, input.toString, numTopDocs, reserveWords, sc)
+              }
+              case "doc-doc" => {
+                println("Enter a repo to find similar repos:")
+                val input = readLine()
+                println("Top documents for "+input+" are:")
+                printTopDocsForDoc(normalizedUS, input.toString, idDocs, docIds, numTopDocs)
+              }
+              case "term-term" => {
+                println("Enter a term to find similar terms:")
+                val input = readLine()
+                println("Top terms for "+input+" are:")
+                printRelevantTerms(input.toString, normalizedVS, vocabulary, termIds)
+              }
+              case "term-doc"  => {
+                println("Enter a terms to find repos containing it:")
+                val input = readLine()
+                println("Top documents containing "+input+":")
+                printTopDocsForTerm(normalizedUS, svd.V, input.toString, vocabulary, docIds, numTopDocs)
+              }
+              case "terms-doc" => {
+                println("Enter set of terms to find repos containing it:")
+                val input = readLine()
+                println("Top documents containing "+input+":")
+                val termSeq = input.toString.split(",").toSeq
+                printRelevantDocs(normalizedUS, svd.V, termSeq, vocabulary, idfsMap, docIds, numTopDocs)
+              }
+              case "exit" => break
+            }
+          }
+          catch {
+            case ex: Exception => log.error("Exception match not found {}", ex)
+            println("Match not found. Enter another option")
+          }
+        }
+      }
 /*********************************************CONSOLE PRINTING ENDS HERE***********************************************/
   }
 
@@ -310,18 +313,18 @@ object LsaApp extends Logger {
         val repoName: String = regexToRemovePath.replaceAllIn(fileName,"")
         (repoName,fileContent)
     }
-    zipStreamToText 
+    zipStreamToText
   }
 
   /* Method 'removeJavaComments' removes all comments and special characters from each '.java' file*/
   def removeJavaComments(zipStreamToText : RDD[(String, String)]) : RDD[(String, String)] = {
     val commentsRemoved: RDD[(String, String)] = zipStreamToText.mapValues{fileContent =>
-      removeCommentsAndSpecilChars(fileContent)
+      removeCommentsAndSpecialChars(fileContent)
     }
-    commentsRemoved   
+    commentsRemoved
   }
 
-  def removeCommentsAndSpecilChars(fileContent:String) : String = {
+  def removeCommentsAndSpecialChars(fileContent:String) : String = {
     val regexSpecialChars: Regex = """[^a-zA-Z\s]""".r
     /* 'regexSpecialchars' represents a pattern for special characters*/
     val reader:Reader = new StringReader(fileContent)
@@ -334,7 +337,7 @@ object LsaApp extends Logger {
   }
 
   /* In step this cleaned text is splitted into list of words. And reserved words are removed from the list of words*/
-  def extractIdentifierCountPairs(codeDataWithOutComments: RDD[(String, String)],reserveWords: Broadcast[List[String]]) 
+  def extractIdentifierCountPairs(codeDataWithOutComments: RDD[(String, String)],reserveWords: Broadcast[List[String]])
   : RDD[(String, List[String])] = {
     val identifiersForEachDocument: RDD[(String, List[String])] = codeDataWithOutComments.mapValues{codeWithOutComments =>
       extractBagOfWords(codeWithOutComments,reserveWords)
@@ -343,9 +346,9 @@ object LsaApp extends Logger {
   }
 
   def extractBagOfWords(codeWithOutComments: String,reserveWords: Broadcast[List[String]]) : List[String] = {
-    val listOfWords: List[String] = codeWithOutComments.split("\\s+").toList.filter(x => x != "") 
+    val listOfWords: List[String] = codeWithOutComments.split("\\s+").toList.filter(x => x != "")
     /* Text 'inp' is splitted into list of words and stored in listOfWords'*/
-    val allReserveWords: List[String] = reserveWords.value 
+    val allReserveWords: List[String] = reserveWords.value
     /* Broadcasted listed of reserve words are accessed and stored in 'allReserveWords' */
     val removeReserveWords: ListBuffer[String] =  new ListBuffer[String]()/* 'removeReserveWords' is list buffer to strings */
     for(word <- listOfWords if !allReserveWords.contains(word)) convertToCamelCase(word).foreach(removeReserveWords+=_)
@@ -481,44 +484,45 @@ object LsaApp extends Logger {
     allDocWeights.filter(!_._1.isNaN).top(numTopDocs)
   }
 
-  def topDocsForNewDoc(normalizedUS: RowMatrix, V: Matrix, idTerms: Map[String, Int],
-   idfs: Map[String, Double], docIds: Map[Long, String], newDocPath: String, numTopDocs:Int,
-    bidfs:Broadcast[Map[String,Double]], termList:Broadcast[Map[String,Int]],
-    reserveWords:Broadcast[List[String]]) = {
+  def topDocsForNewDoc(normalizedUS: RowMatrix, V: Matrix, idTerms: RDD[(String, Long)],
+   idfs: RDD[(String, Double)], docIds: RDD[(Long, String)], newDocPath: String, numTopDocs:Int,
+    reserveWords:Broadcast[List[String]], sc: SparkContext) = {
     val zipFile:FileInputStream = new FileInputStream(newDocPath)
     val zipIn:ZipInputStream = new ZipInputStream(zipFile)
     val (fileContent,count) = ZipBasicParser.readFilesAndPackages(zipIn)
 
-    val lines = removeCommentsAndSpecilChars(fileContent)
+    val lines = removeCommentsAndSpecialChars(fileContent)
 
     val bagOfWords = extractBagOfWords(lines,reserveWords)
 
     val pairs: Predef.Map[String, Int] = bagOfWords.groupBy(x => x).mapValues(_.size)
 
-    val idf: Predef.Map[String, Double] = bidfs.value/* Locally obtaining broadcasted bidfs values */
-    val allIdentifiers: Predef.Map[String, Int] = termList.value/* Locally obtaining broadcasted  values */
+    //val idf: Predef.Map[String, Double] = bidfs.value/* Locally obtaining broadcasted bidfs values */
+    //val allIdentifiers: Predef.Map[String, Int] = termList.value/* Locally obtaining broadcasted  values */
     val docTotalTerms: Int = pairs.values.sum
     val termInThisDocument: List[String] = pairs.keySet.toList/* Obtaining all terms from this document*/
-    val sizeOfVector: Int = allIdentifiers.size/* Computing number of terms(identifiers) across all the documents*/
+    //val sizeOfVector: Int = idTerms.count().toInt/* Computing number of terms(identifiers) across all the documents*/
     var tfidfMap:Map[String,Double] = Map()/* Computing a map of (identifier, tfidf) pairs from term-document
        (identifier, count) pairs and document-frequency (identifier, idfs) pair */
     var termSequence: ListBuffer[String] = new ListBuffer[String]()
-    for(term <- termInThisDocument if allIdentifiers.contains(term)) {
-      tfidfMap += (term -> pairs(term)*idf(term)/docTotalTerms) /* TFIDF computation */
+    for(term <- termInThisDocument if idTerms.lookup(term).size != 0) {
+      tfidfMap += (term -> pairs(term)*idfs.lookup(term)(0)/docTotalTerms) /* TFIDF computation */
       termSequence += term
     }
+    val tfidfRDD: RDD[(String, Double)] = sc.parallelize(tfidfMap.toSeq)
     val termSeq: immutable.Seq[String] = termSequence.toList.toSeq
-    printRelevantDocs(normalizedUS, V, termSeq, idTerms, tfidfMap, docIds, numTopDocs)
+    printRelevantDocs(normalizedUS, V, termSeq, idTerms, tfidfRDD, docIds, numTopDocs)
   }
 
-  def printIdWeights[T](idWeights: Seq[(Double, T)], entityIds: Map[T, String]) {
-    idWeights.map{case (score, id) => (entityIds(id), score)}.foreach(println)
+  def printIdWeights[T](idWeights: Seq[(Double, T)], entityIds: RDD[(T, String)])
+                       (implicit evide: scala.reflect.ClassTag[T]) {
+    idWeights.map{case (score, id) => (entityIds.lookup(id)(0), score)}.foreach(println)
   }
 
-  def printTopDocsForDoc(normalizedUS: RowMatrix, doc: String, idDocs: Map[String, Long],
-      docIds: Map[Long, String], numTopDocs:Int) {
+  def printTopDocsForDoc(normalizedUS: RowMatrix, doc: String, idDocs: RDD[(String, Long)],
+      docIds: RDD[(Long, String)], numTopDocs:Int) {
     try {
-      val docID:Long = idDocs(doc)
+      val docID: Long = idDocs.lookup(doc)(0)
       printIdWeights[Long](topDocsForDoc(normalizedUS, docID, numTopDocs), docIds)
     } catch {
       case ex: Exception => log.error("Exception doc not found {}", ex)
@@ -538,10 +542,10 @@ object LsaApp extends Logger {
     allDocWeights.filter(!_._1.isNaN).top(numTopDocs)
   }
 
-  def printTopDocsForTerm(US: RowMatrix, V: Matrix, term: String, idTerms: Map[String, Int],
-      docIds: Map[Long, String], numTopDocs:Int) {
+  def printTopDocsForTerm(US: RowMatrix, V: Matrix, term: String, idTerms: RDD[(String, Long)],
+      docIds: RDD[(Long, String)], numTopDocs:Int) {
     try {
-      val termID:Int = idTerms(term)
+      val termID: Int = idTerms.lookup(term)(0).toInt
       printIdWeights[Long](topDocsForTerm(US, V, termID, numTopDocs), docIds)
     } catch {
       case ex: Exception => log.error("Exception term not found {}", ex)
@@ -549,11 +553,11 @@ object LsaApp extends Logger {
     }
   }
 
-  def termsToQueryVector(terms: Seq[String], idTerms: Map[String, Int], idfs: Map[String, Double])
+  def termsToQueryVector(terms: Seq[String], idTerms: RDD[(String, Long)], idfs: RDD[(String, Double)])
     : BSparseVector[Double] = {
-    val indices: Array[Int] = terms.map(idTerms(_)).toArray
-    val values: Array[Double] = terms.map(idfs(_)).toArray
-    new BSparseVector[Double](indices, values, idTerms.size)
+    val indices: Array[Int] = terms.map(idTerms.lookup(_)(0).toInt).toArray
+    val values: Array[Double] = terms.map(idfs.lookup(_)(0)).toArray
+    new BSparseVector[Double](indices, values, idTerms.count().toInt)
   }
 
   def topDocsForTermQuery(normalizedUS: RowMatrix, V: Matrix, query: BSparseVector[Double], numTopDocs:Int)
@@ -573,17 +577,17 @@ object LsaApp extends Logger {
     allDocWeights.filter(!_._1.isNaN).top(numTopDocs)
   }
 
-  def printRelevantDocs(normalizedUS: RowMatrix, V: Matrix, terms: Seq[String], idTerms: Map[String, Int],
-   idfs: Map[String, Double], docIds: Map[Long, String], numTopDocs:Int) {
+  def printRelevantDocs(normalizedUS: RowMatrix, V: Matrix, terms: Seq[String], idTerms: RDD[(String, Long)],
+   idfs: RDD[(String, Double)], docIds: RDD[(Long, String)], numTopDocs:Int) {
     val queryVec: BSparseVector[Double] = termsToQueryVector(terms, idTerms, idfs)
-    printIdWeights(topDocsForTermQuery(normalizedUS, V, queryVec, numTopDocs), docIds)
+    printIdWeights[Long](topDocsForTermQuery(normalizedUS, V, queryVec, numTopDocs), docIds)
   }
 
   /**
    * Finds terms relevant to a term. Returns the term IDs and scores for the terms with the highest
    * relevance scores to the given term.
    */
-  def topTermsForTerm(normalizedVS: BDenseMatrix[Double], termId: Int): Seq[(Double, Int)] = {
+  def topTermsForTerm(normalizedVS: BDenseMatrix[Double], termId: Int): Seq[(Double, Long)] = {
     // Look up the row in VS corresponding to the given term ID.
     val termRowVec: BDenseVector[Double] = new BDenseVector[Double](row(normalizedVS, termId).toArray)
 
@@ -591,13 +595,13 @@ object LsaApp extends Logger {
     val termScores: Array[(Double, Int)] = (normalizedVS * termRowVec).toArray.zipWithIndex
 
     // Find the terms with the highest scores
-    termScores.sortBy(-_._1).take(20)
+    termScores.sortBy(-_._1).take(20).map{case(k,v) => (k,v.toLong)}.toSeq
   }
 
-  def printRelevantTerms(term: String, normalizedVS: BDenseMatrix[Double], idTerms: Map[String, Int], termIds: Map[Int, String]) {
+  def printRelevantTerms(term: String, normalizedVS: BDenseMatrix[Double], idTerms: RDD[(String, Long)], termIds: RDD[(Long, String)]) {
     try {
-      val id: Int = idTerms(term)
-      printIdWeights[Int](topTermsForTerm(normalizedVS, id), termIds)
+      val id: Int = idTerms.lookup(term)(0).toInt
+      printIdWeights[Long](topTermsForTerm(normalizedVS, id), termIds)
     } catch {
       case ex: Exception => log.error("Exception term not found {}", ex)
       println("Term not found. Enter another term")
