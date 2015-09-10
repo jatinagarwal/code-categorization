@@ -168,10 +168,16 @@ object LsaApp extends Logger {
     termDocumentFrequencies.unpersist()
 
     val vocabularyAndDf: RDD[(String, (Long, Int))] = tfidf.keys
+    val vocabularyAndIdf: RDD[(String, (Long, Double))] = vocabularyAndDf.mapValues{inp =>
+      (inp._1,math.log(numDocs.toDouble/inp._2))
+    }
     val vocabulary: RDD[(String, Long)] = vocabularyAndDf.mapValues{inp => inp._1}
     val termIds: RDD[(Long, String)] = vocabulary.map(_.swap)
-    val idfsMap: RDD[(String, Double)] = vocabularyAndDf.mapValues{inp => math.log(numDocs.toDouble/inp._2)}
+    val idfsMap: RDD[(String, Double)] = vocabularyAndIdf.mapValues{inp => inp._2}
     termIds.persist(StorageLevel.MEMORY_AND_DISK)
+    vocabulary.persist(StorageLevel.MEMORY_AND_DISK)
+    idfsMap.persist(StorageLevel.MEMORY_AND_DISK)
+    vocabularyAndIdf.persist(StorageLevel.MEMORY_AND_DISK)
 //    val tfi: RDD[(String, Long, Double)] = tfidf.flatMap{
 //      case(k,v) =>
 //        v.map(b => (b._1,b._2,b._3*math.log(numDocs.toDouble/b._5)/b._4))
@@ -194,8 +200,12 @@ object LsaApp extends Logger {
     val idDocs: RDD[(String, Long)] = tfidfVector.map(_._1).zipWithUniqueId()
     val docIds: RDD[(Long, String)] = idDocs.map(_.swap)
     docIds.persist(StorageLevel.MEMORY_AND_DISK)
+    idDocs.persist(StorageLevel.MEMORY_AND_DISK)
     val terms: Long = termIds.count()
     val docs: Long = docIds.count()
+    val idDocsCount = idDocs.count()
+    val idfsMapCount = idfsMap.count()
+    val vocabularyAndIdfCount = vocabularyAndIdf.count()
     tfidf.unpersist()
     /* Documents names are associated to unique ids */
 /**********************************************TFIDF COMPUTATION ENDS HERE*********************************************/
@@ -263,7 +273,8 @@ object LsaApp extends Logger {
                 println("Enter a path to a repo to find similar repos:")
                 val input = readLine()
                 println("Top documents for "+input+" are:")
-                topDocsForNewDoc(normalizedUS, svd.V, vocabulary, idfsMap, docIds, input.toString, numTopDocs, reserveWords, sc)
+                topDocsForNewDoc(normalizedUS, svd.V, vocabulary, idfsMap, docIds, input.toString, numTopDocs,
+                  reserveWords, sc, vocabularyAndIdf)
               }
               case "doc-doc" => {
                 println("Enter a repo to find similar repos:")
@@ -486,7 +497,7 @@ object LsaApp extends Logger {
 
   def topDocsForNewDoc(normalizedUS: RowMatrix, V: Matrix, idTerms: RDD[(String, Long)],
    idfs: RDD[(String, Double)], docIds: RDD[(Long, String)], newDocPath: String, numTopDocs:Int,
-    reserveWords:Broadcast[List[String]], sc: SparkContext) = {
+    reserveWords:Broadcast[List[String]], sc: SparkContext, vocabularyAndIdf: RDD[(String, (Long, Double))] ) = {
     val zipFile:FileInputStream = new FileInputStream(newDocPath)
     val zipIn:ZipInputStream = new ZipInputStream(zipFile)
     val (fileContent,count) = ZipBasicParser.readFilesAndPackages(zipIn)
@@ -505,9 +516,12 @@ object LsaApp extends Logger {
     var tfidfMap:Map[String,Double] = Map()/* Computing a map of (identifier, tfidf) pairs from term-document
        (identifier, count) pairs and document-frequency (identifier, idfs) pair */
     var termSequence: ListBuffer[String] = new ListBuffer[String]()
-    for(term <- termInThisDocument if idTerms.lookup(term).size != 0) {
-      tfidfMap += (term -> pairs(term)*idfs.lookup(term)(0)/docTotalTerms) /* TFIDF computation */
-      termSequence += term
+    termInThisDocument.foreach{inp =>
+      val termID: Seq[(Long, Double)] = vocabularyAndIdf.lookup(inp)
+      if (termID.size != 0) {
+        tfidfMap += (inp -> pairs(inp)*termID(0)._2/docTotalTerms) /* TFIDF computation */
+        termSequence += inp
+      }
     }
     val tfidfRDD: RDD[(String, Double)] = sc.parallelize(tfidfMap.toSeq)
     val termSeq: immutable.Seq[String] = termSequence.toList.toSeq
