@@ -65,8 +65,8 @@ object LsaApp extends Logger {
     "strictfp", "volatile",	"const", "float", "native", "super", "while", "true", "false", "null", "String", "java",
     "util", "ArrayList", "println", "Arrays", "System", "File", "main")
 
-    val conf: SparkConf = new SparkConf().setAppName("Lsa Application").set("spark.executor.memory", "14g")/* Spark Coonfiguration
-     object in order to perform configuration settings. 'Lsa Application' is name of application*/
+    val conf: SparkConf = new SparkConf().setAppName("Lsa Application").set("spark.executor.memory", "14g").set("spark.eventLog.enabled",true)
+    /* Spark Coonfiguration object in order to perform configuration settings. 'Lsa Application' is name of application*/
     val sc: SparkContext = new SparkContext(conf)/* 'sc' is spark context object to perform all spark related
     operations with configuration setting from 'conf' */
     val codeData: RDD[(String, PortableDataStream)] = sc.binaryFiles(dataFiles)/* 'codeData' is a RDD representing tuples of form
@@ -106,6 +106,10 @@ object LsaApp extends Logger {
      identifier across all the documents*/
     val documentFrequencies: RDD[(String, Int)] = termDocumentFrequencies.flatMapValues(inp =>
       inp).values.mapValues{inp => 1}.reduceByKey((x,y) => x+y)
+    val collectDFs: Array[(String, Int)] =  documentFrequencies.map{case(id,c) => (-c,id)}.sortByKey().map{case(c,id) => (id,-c)}.collect()
+    val DFs = new PrintWriter(new File("vocab_df.txt" ))
+    collectDFs.foreach(DFs.println(_))
+    DFs.close()
     /* In above step document frequencies are calculated for the terms across all the documents*/  
     // val docFreqs = documentFrequencies.collect().sortBy(- _._2)    
     val docFreqs: RDD[(String, Int)] = documentFrequencies.filter{ case(identifier,count) => count >1 && count <= documentFrequencySize}.map{case(id,c) =>
