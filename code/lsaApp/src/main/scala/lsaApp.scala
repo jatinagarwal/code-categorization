@@ -57,7 +57,7 @@ object LsaApp extends Logger {
     /* 'dataFiles' implies path of the directory where data resides */
   /******************************************** INITIALIZATION STARTS HERE******************************************/
     /* 'keywords' is list of all reserve words in java programming language*/
-    var a: Char = readChar()
+
     val keywords: List[String] = List("abstract", "continue", "for", "new", "switch", "assert", "default", "goto", "package",
     "synchronized", "boolean", "do", "if", "private", "this", "break", "double", "implements", "protected", "throw",
     "byte", "else", "import", "public", "throws", "case", "enum", "instanceof", "return", "transient", "catch",
@@ -65,7 +65,7 @@ object LsaApp extends Logger {
     "strictfp", "volatile",	"const", "float", "native", "super", "while", "true", "false", "null", "String", "java",
     "util", "ArrayList", "println", "Arrays", "System", "File", "main")
 
-    val conf: SparkConf = new SparkConf().setAppName("Lsa Application").set("spark.executor.memory", "14g").set("spark.eventLog.enabled",true)
+    val conf: SparkConf = new SparkConf().setAppName("Lsa Application")
     /* Spark Coonfiguration object in order to perform configuration settings. 'Lsa Application' is name of application*/
     val sc: SparkContext = new SparkContext(conf)/* 'sc' is spark context object to perform all spark related
     operations with configuration setting from 'conf' */
@@ -91,8 +91,8 @@ object LsaApp extends Logger {
     termDocumentFrequencies.persist(StorageLevel.MEMORY_AND_DISK)
      /* RDD 'termDocumentFrequencies' is persisted in the memory as two or more transformation are performed on it*/
     val numDocs: Long = termDocumentFrequencies.count() /*Computing number of documents*/
-    val idDocs: Predef.Map[String, Long] = termDocumentFrequencies.map(_._1).zipWithUniqueId().collectAsMap().toMap
-    val docIds: Predef.Map[Long, String] = idDocs.map(_.swap)
+//    val idDocs: Predef.Map[String, Long] = termDocumentFrequencies.map(_._1).zipWithUniqueId().collectAsMap().toMap
+//    val docIds: Predef.Map[Long, String] = idDocs.map(_.swap)
     /* Documents names are associated to unique ids */
 /***********************************************TERM FREQUENCIES ENDS HERE*******************************************/
 
@@ -104,22 +104,25 @@ object LsaApp extends Logger {
     (identifier, count) pairs. Secondly, each (identifier, count) pair is mapped to  (identifier, 1). Now each
     (identifier, 1) pair is reduced based on key to compute (identifier, df) where 'df' is the document frequency of
      identifier across all the documents*/
-    val documentFrequencies: RDD[(String, Int)] = termDocumentFrequencies.flatMapValues(inp =>
-      inp).values.mapValues{inp => 1}.reduceByKey((x,y) => x+y)
-    val collectDFs: Array[(String, Int)] =  documentFrequencies.map{case(id,c) => (-c,id)}.sortByKey().map{case(c,id) => (id,-c)}.collect()
-    val DFs = new PrintWriter(new File("vocab_df.txt" ))
-    collectDFs.foreach(DFs.println(_))
-    DFs.close()
+//    val documentFrequencies: RDD[(String, Int)] = termDocumentFrequencies.flatMapValues(inp =>
+//      inp).values.mapValues{inp => 1}.reduceByKey((x,y) => x+y)
+//    val collectDFs: Array[(String, Int)] =  documentFrequencies.map{case(id,c) => (-c,id)}.sortByKey().map{case(c,id) => (id,-c)}.collect()
+//    val DFs = new PrintWriter(new File("vocab_df.txt" ))
+//    collectDFs.foreach(DFs.println(_))
+//    DFs.close()
     /* In above step document frequencies are calculated for the terms across all the documents*/  
     // val docFreqs = documentFrequencies.collect().sortBy(- _._2)    
-    val docFreqs: RDD[(String, Int)] = documentFrequencies.filter{ case(identifier,count) => count >1 && count <= documentFrequencySize}.map{case(id,c) =>
-      (-c,id)}.sortByKey().map{case(c,id) => (id,-c)}
+//    val docFreqs: RDD[(String, Int)] = documentFrequencies.filter{ case(identifier,count) => count >1 && count <= documentFrequencySize}.map{case(id,c) =>
+//      (-c,id)}.sortByKey().map{case(c,id) => (id,-c)}
     /* Filtering (identifier, df) pairs from 'documentFrequencies' based on optimization specified in paper*/
-    docFreqs.persist(StorageLevel.MEMORY_AND_DISK)
-    val numTerms: Long = docFreqs.count()
+//    docFreqs.persist(StorageLevel.MEMORY_AND_DISK)
+//    val numTerms: Long = docFreqs.count()
     /* RDD 'docFreqs' is persisted in the memory as two or more transformation are performed on it*/
-    var featureVectorSize:Int = (numTerms*featureVectorPercent).toInt;
-    val featureVector: Array[(String, Int)] = docFreqs.take(featureVectorSize)
+//    var featureVectorSize:Int = (numTerms*featureVectorPercent).toInt;
+    val featureVector: Array[(String, Int)] = sc.textFile("vocab_df_15201_0.2_from_400.txt").map{line =>
+    val a = line.split(",")
+    a(0) -> a(1).toInt
+  }.collect()
     val idfs: Array[(String, Double)] = inverseDocumentFrequencies(featureVector, numDocs)
     /* Computing inverse document frequencies 'idfs' from document frequencies */
     val idfsMap: Predef.Map[String, Double] = idfs.toMap
@@ -127,11 +130,34 @@ object LsaApp extends Logger {
     val vocabulary: Predef.Map[String, Int] = idfsMap.keys.zipWithIndex.toMap/* Collecting all the identifiers after filtering (identifier, df) pairs*/
     val termList: Broadcast[Predef.Map[String, Int]] = sc.broadcast(vocabulary)/* Broadcasting vocabulary across all nodes of clusters*/
     val termIds: Predef.Map[Int, String] = vocabulary.map(_.swap).toMap /* Terms are associated with the ids as shown (id, term) */
-    docFreqs.unpersist()
 /*******************************************DOCUMENT FREQUENCIES ENDS HERE*********************************************/
 
    
 /**********************************************TFIDF COMPUTATION STARTS HERE*******************************************/
+
+    val tfVector: RDD[(String, Vector)] = termDocumentFrequencies.mapValues{termFreqPair =>
+      val allIdentifiers: Predef.Map[String, Int] = termList.value/* Locally obtaining broadcasted  values */
+      val docTotalTerms: Double = termFreqPair.values.sum + 0.0
+      val termInThisDocument: List[String] = termFreqPair.keySet.toList/* Obtaining all terms from this document*/
+      val sizeOfVector: Int = allIdentifiers.size/* Computing number of terms(identifiers) across all the documents*/
+      var tfidfMap:Map[Int,Double] = Map()/* Computing a map of (identifier, tfidf) pairs from term-document
+           (identifier, count) pairs and document-frequency (identifier, idfs) pair */
+      for(term <- termInThisDocument if allIdentifiers.contains(term)) {
+        tfidfMap += (allIdentifiers(term) -> termFreqPair(term)/docTotalTerms) /* TFIDF computation */
+      }
+      val tfidfSeq: Seq[(Int, Double)] = tfidfMap.toSeq/* Converting 'tfidfMap' map to a sequence */
+      Vectors.sparse(sizeOfVector, tfidfSeq) /*Obtaining sparse vector from 'tfidfSeq' sequence and 'sizeOfVector'*/
+    }
+
+    tfVector.persist(StorageLevel.MEMORY_AND_DISK)
+    val dataKeys = new PrintWriter(new File("tfVector_input_keys.txt" ))
+    tfVector.keys.collect().foreach(dataKeys.println(_))
+    dataKeys.close()
+    val dataValues = new PrintWriter(new File("tfVector_input_values.txt" ))
+    tfVector.values.collect().map(_.toArray.mkString(" ")).foreach(dataValues.println(_))
+    dataValues.close()
+    tfVector.unpersist()
+
     /* Computing tfidf from term frequencies and Inverse document frequencies */
     val tfidf: RDD[(String, Vector)] = termDocumentFrequencies.mapValues{termFreqPair =>
       val idf: Predef.Map[String, Double] = bidfs.value/* Locally obtaining broadcasted bidfs values */
@@ -151,108 +177,111 @@ object LsaApp extends Logger {
     tfidf.persist(StorageLevel.MEMORY_AND_DISK)
     /* RDD 'tfidf' is persisted in the memory as two or more operations are performed while computing row matrix*/
     tfidf.count()
+    val tfidfValues = new PrintWriter(new File("tfidfVector_input_values.txt" ))
+    tfidf.values.collect().map(_.toArray.mkString(" ")).foreach(tfidfValues.println(_))
+    tfidfValues.close()
     /* Action is performed on tfidf vector in order to evaluate tfidf as it is needed in next step */
 
 /**********************************************TFIDF COMPUTATION ENDS HERE*********************************************/
 
 
 /**********************************************MATRIX COMPUTATION STARTS HERE******************************************/
-    /* Constructing sparse matrix from tfidf sparse vectors obtained in the previous step*/
-    termDocumentFrequencies.unpersist()
-    val mat: RowMatrix = new RowMatrix(tfidf.values)
-    val m: Long = mat.numRows /* Number of rows in a matrix */
-    val n: Long = mat.numCols /* Number of columns in a matrix */  
-    /* Computing svd from the 'mat' to obtain matrices*/
-    val svd: SingularValueDecomposition[RowMatrix, Matrix] = mat.computeSVD(k, computeU=true)
-
-    /* Extracts top terms from top most concepts */
-    val topConceptTerms: Seq[Seq[(String, Double)]] = topTermsInTopConcepts(svd, numTopConcepts, numTopTerms, termIds)
-    /* Extracts top documents from top most concepts */
-    val topConceptDocs: Seq[Seq[(String, Double)]] = topDocsInTopConcepts(svd, numTopConcepts, numTopDocs, docIds)
-
-    val US: RowMatrix = multiplyByDiagonalMatrix(svd.U, svd.s)
-    val normalizedUS: RowMatrix = rowsNormalized(US)
-
-    val VS: BDenseMatrix[Double] = multiplyByDiagonalMatrix(svd.V, svd.s)
-    val normalizedVS: BDenseMatrix[Double] = rowsNormalized(VS)
-/**********************************************MATRIX COMPUTATION ENDS HERE********************************************/
-
-
-/*******************************************CONSOLE PRINTING STARTS HERE***********************************************/
-    println("********************************Number of Documents: " +numDocs +" **************************************")
-    println("**************************Size of Feature Vector: " +featureVectorSize +" *******************************")
-    // println("***********************************Total terms ***************************: "+ documentFrequencies.count())
-    println("****************************Number of Terms after filtering: " +numTerms+" ***********************")
-    println("*************************************** LIST OF WORDS ***************************************************")
-    println("**************************************FILTERED DOCUMET FREQUENCIES ************************************")
-    featureVector.foreach(println)
-    println("************************************************SVD computed*********************************************")
-    println("Singular values: " + svd.s)
-
-    println("Number of rows: "+m+ " " + "Number of Columns: "+n)
-    println("**********************************************Doc Ids****************************************************")
-    docIds.take(10).foreach(println)
-        
-    for ((terms, docs) <- topConceptTerms.zip(topConceptDocs)) {
-      println("Concept terms: " + terms.map(_._1).mkString(", ")  )
-      // println("Concept docs: " + docs.map(_._1).mkString(", "))
-      println("Concept docs: ")
-      docs.map(_._1).foreach(println)
-      println()
-    }
-
-    breakable {
-      while(true) {
-        println("Enter one of the following options:")
-        println("new-doc : To find similar repos to a new repo")
-        println("doc-doc : To find most similar repos to a repo in trained dataset")
-        println("term-term : To find most similar terms to a term")
-        println("term-doc: To find most similar repos to a term")
-        println("terms-doc: To find most similar repos to a set of terms")
-        println("exit : To exit the application")
-        var i = readLine()
-        try {  
-          val x = (i: @switch) match {
-              case "new-doc"  => {
-                println("Enter a path to a repo to find similar repos:")
-                val input = readLine()
-                println("Top documents for "+input+" are:")
-                topDocsForNewDoc(normalizedUS, svd.V, vocabulary, idfsMap, docIds, input.toString, numTopDocs, bidfs, termList, reserveWords)
-              }
-              case "doc-doc" => {
-                println("Enter a repo to find similar repos:")
-                val input = readLine()
-                println("Top documents for "+input+" are:")
-                printTopDocsForDoc(normalizedUS, input.toString, idDocs, docIds, numTopDocs)
-              }
-              case "term-term" => {
-                println("Enter a term to find similar terms:")
-                val input = readLine()
-                println("Top terms for "+input+" are:")
-                printRelevantTerms(input.toString, normalizedVS, vocabulary, termIds)
-              }
-              case "term-doc"  => {
-                println("Enter a terms to find repos containing it:")
-                val input = readLine()
-                println("Top documents contianing "+input+":")
-                printTopDocsForTerm(normalizedUS, svd.V, input.toString, vocabulary, docIds, numTopDocs)
-              }
-              case "terms-doc" => {
-                println("Enter set of terms to find repos containing it:")
-                val input = readLine()
-                println("Top documents contianing "+input+":")
-                val termSeq = input.toString.split(",").toSeq
-                printRelevantDocs(normalizedUS, svd.V, termSeq, vocabulary, idfsMap, docIds, numTopDocs)
-              }
-              case "exit" => break
-            }
-          }
-          catch {
-            case ex: Exception => log.error("Exception match not found {}", ex)
-            println("Match not found. Enter another option")  
-          }  
-        }
-      }
+//    /* Constructing sparse matrix from tfidf sparse vectors obtained in the previous step*/
+//    termDocumentFrequencies.unpersist()
+//    val mat: RowMatrix = new RowMatrix(tfidf.values)
+//    val m: Long = mat.numRows /* Number of rows in a matrix */
+//    val n: Long = mat.numCols /* Number of columns in a matrix */
+//    /* Computing svd from the 'mat' to obtain matrices*/
+//    val svd: SingularValueDecomposition[RowMatrix, Matrix] = mat.computeSVD(k, computeU=true)
+//
+//    /* Extracts top terms from top most concepts */
+//    val topConceptTerms: Seq[Seq[(String, Double)]] = topTermsInTopConcepts(svd, numTopConcepts, numTopTerms, termIds)
+//    /* Extracts top documents from top most concepts */
+//    val topConceptDocs: Seq[Seq[(String, Double)]] = topDocsInTopConcepts(svd, numTopConcepts, numTopDocs, docIds)
+//
+//    val US: RowMatrix = multiplyByDiagonalMatrix(svd.U, svd.s)
+//    val normalizedUS: RowMatrix = rowsNormalized(US)
+//
+//    val VS: BDenseMatrix[Double] = multiplyByDiagonalMatrix(svd.V, svd.s)
+//    val normalizedVS: BDenseMatrix[Double] = rowsNormalized(VS)
+///**********************************************MATRIX COMPUTATION ENDS HERE********************************************/
+//
+//
+///*******************************************CONSOLE PRINTING STARTS HERE***********************************************/
+//    println("********************************Number of Documents: " +numDocs +" **************************************")
+//    println("**************************Size of Feature Vector: " +featureVectorSize +" *******************************")
+//    // println("***********************************Total terms ***************************: "+ documentFrequencies.count())
+//    println("****************************Number of Terms after filtering: " +numTerms+" ***********************")
+//    println("*************************************** LIST OF WORDS ***************************************************")
+//    println("**************************************FILTERED DOCUMET FREQUENCIES ************************************")
+//    featureVector.foreach(println)
+//    println("************************************************SVD computed*********************************************")
+//    println("Singular values: " + svd.s)
+//
+//    println("Number of rows: "+m+ " " + "Number of Columns: "+n)
+//    println("**********************************************Doc Ids****************************************************")
+//    docIds.take(10).foreach(println)
+//
+//    for ((terms, docs) <- topConceptTerms.zip(topConceptDocs)) {
+//      println("Concept terms: " + terms.map(_._1).mkString(", ")  )
+//      // println("Concept docs: " + docs.map(_._1).mkString(", "))
+//      println("Concept docs: ")
+//      docs.map(_._1).foreach(println)
+//      println()
+//    }
+//
+//    breakable {
+//      while(true) {
+//        println("Enter one of the following options:")
+//        println("new-doc : To find similar repos to a new repo")
+//        println("doc-doc : To find most similar repos to a repo in trained dataset")
+//        println("term-term : To find most similar terms to a term")
+//        println("term-doc: To find most similar repos to a term")
+//        println("terms-doc: To find most similar repos to a set of terms")
+//        println("exit : To exit the application")
+//        var i = readLine()
+//        try {
+//          val x = (i: @switch) match {
+//              case "new-doc"  => {
+//                println("Enter a path to a repo to find similar repos:")
+//                val input = readLine()
+//                println("Top documents for "+input+" are:")
+//                topDocsForNewDoc(normalizedUS, svd.V, vocabulary, idfsMap, docIds, input.toString, numTopDocs, bidfs, termList, reserveWords)
+//              }
+//              case "doc-doc" => {
+//                println("Enter a repo to find similar repos:")
+//                val input = readLine()
+//                println("Top documents for "+input+" are:")
+//                printTopDocsForDoc(normalizedUS, input.toString, idDocs, docIds, numTopDocs)
+//              }
+//              case "term-term" => {
+//                println("Enter a term to find similar terms:")
+//                val input = readLine()
+//                println("Top terms for "+input+" are:")
+//                printRelevantTerms(input.toString, normalizedVS, vocabulary, termIds)
+//              }
+//              case "term-doc"  => {
+//                println("Enter a terms to find repos containing it:")
+//                val input = readLine()
+//                println("Top documents contianing "+input+":")
+//                printTopDocsForTerm(normalizedUS, svd.V, input.toString, vocabulary, docIds, numTopDocs)
+//              }
+//              case "terms-doc" => {
+//                println("Enter set of terms to find repos containing it:")
+//                val input = readLine()
+//                println("Top documents contianing "+input+":")
+//                val termSeq = input.toString.split(",").toSeq
+//                printRelevantDocs(normalizedUS, svd.V, termSeq, vocabulary, idfsMap, docIds, numTopDocs)
+//              }
+//              case "exit" => break
+//            }
+//          }
+//          catch {
+//            case ex: Exception => log.error("Exception match not found {}", ex)
+//            println("Match not found. Enter another option")
+//          }
+//        }
+//      }
 /*********************************************CONSOLE PRINTING ENDS HERE***********************************************/
   }
 
@@ -305,7 +334,11 @@ object LsaApp extends Logger {
     val allReserveWords: List[String] = reserveWords.value 
     /* Broadcasted listed of reserve words are accessed and stored in 'allReserveWords' */
     val removeReserveWords: ListBuffer[String] =  new ListBuffer[String]()/* 'removeReserveWords' is list buffer to strings */
-    for(word <- listOfWords if !allReserveWords.contains(word)) convertToCamelCase(word).foreach(removeReserveWords+=_)
+    val cc:CamelCase = new CamelCase()
+    for(word <- listOfWords if !allReserveWords.contains(word)) {
+      val words: List[String] = cc.splitCamelCase(word).split(" ").toList.map(_.toLowerCase)
+      words.foreach(removeReserveWords+=_)
+    }
     /* words other than reserve words are appended to 'removeReserveWords'*/
     val bagOfWords:List[String] = removeReserveWords.toList.sorted
     /* 'bagOfWords' contains sorted list of identifiers from a '.java'*/
