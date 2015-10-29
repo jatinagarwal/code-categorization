@@ -47,11 +47,14 @@ object LsaApp extends Logger {
     val numTopDocs: Int = if (args.length > 3) args(3).toInt else 10
     /* 'numTopDocs' is the number of top docs in a concept. If not passed then by default it is set to 10 */
 
-    val documentFrequencySize = if (args.length > 4) args(4).toInt else 50
-    /* 'featureVectorPercent' is the percentage of terms with top document frequencies feature vector*/
+    val documentFrequencyMinSize = if (args.length > 4) args(4).toInt else 30
+    /* 'documentFrequencyMinSize' is the percentage of terms with top document frequencies feature vector*/
 
-    val featureVectorPercent = if (args.length > 5) args(5).toDouble else 1.0
-    /* 'featureVectorPercent' is the percentage of terms with top document frequencies feature vector*/
+    val documentFrequencyMaxSize = if (args.length > 5) args(5).toInt else 40
+    /* 'documentFrequencyMaxSize' is the percentage of terms with top document frequencies feature vector*/
+
+//    val featureVectorPercent = if (args.length > 5) args(5).toDouble else 1.0
+//    /* 'featureVectorPercent' is the percentage of terms with top document frequencies feature vector*/
 
     val dataFiles: String = if (args.length > 6) args(6).toString else "Data/sampleJava"
     /* 'dataFiles' implies path of the directory where data resides */
@@ -104,25 +107,39 @@ object LsaApp extends Logger {
     (identifier, count) pairs. Secondly, each (identifier, count) pair is mapped to  (identifier, 1). Now each
     (identifier, 1) pair is reduced based on key to compute (identifier, df) where 'df' is the document frequency of
      identifier across all the documents*/
-//    val documentFrequencies: RDD[(String, Int)] = termDocumentFrequencies.flatMapValues(inp =>
-//      inp).values.mapValues{inp => 1}.reduceByKey((x,y) => x+y)
-//    val collectDFs: Array[(String, Int)] =  documentFrequencies.map{case(id,c) => (-c,id)}.sortByKey().map{case(c,id) => (id,-c)}.collect()
-//    val DFs = new PrintWriter(new File("vocab_df.txt" ))
-//    collectDFs.foreach(DFs.println(_))
-//    DFs.close()
-    /* In above step document frequencies are calculated for the terms across all the documents*/  
-    // val docFreqs = documentFrequencies.collect().sortBy(- _._2)    
-//    val docFreqs: RDD[(String, Int)] = documentFrequencies.filter{ case(identifier,count) => count >1 && count <= documentFrequencySize}.map{case(id,c) =>
-//      (-c,id)}.sortByKey().map{case(c,id) => (id,-c)}
+    val documentFrequencies: RDD[(String, Int)] = termDocumentFrequencies.flatMapValues(inp =>
+      inp).values.mapValues{inp => 1}.reduceByKey((x,y) => x+y)
+    documentFrequencies.persist(StorageLevel.MEMORY_AND_DISK)
+    val collectDFs: Array[(String, Int)] =  documentFrequencies.map{case(id,c) => (-c,id)}.sortByKey().map{
+      case(c,id) => (id,-c)
+    }.collect()
+
+    val DFs = new PrintWriter(new File("vocab_df.txt" ))
+    collectDFs.foreach(DFs.println(_))
+    DFs.close()
+
+    /* In above step document frequencies are calculated for the terms across all the documents*/
+    // val docFreqs = documentFrequencies.collect().sortBy(- _._2)
+    val docFreqs: RDD[(String, Int)] = documentFrequencies.filter{
+      case(identifier,count) => count >documentFrequencyMinSize && count <= documentFrequencyMaxSize
+    }.map{case(id,c) =>
+      (-c,id)}.sortByKey().map{case(c,id) => (id,-c)
+    }
+
+    val featureVector: Array[(String, Int)] = docFreqs.collect()
+    documentFrequencies.unpersist()
+    val features = new PrintWriter(new File("feature_vector.txt" ))
+    featureVector.foreach(features.println(_))
+    features.close()
     /* Filtering (identifier, df) pairs from 'documentFrequencies' based on optimization specified in paper*/
 //    docFreqs.persist(StorageLevel.MEMORY_AND_DISK)
 //    val numTerms: Long = docFreqs.count()
     /* RDD 'docFreqs' is persisted in the memory as two or more transformation are performed on it*/
 //    var featureVectorSize:Int = (numTerms*featureVectorPercent).toInt;
-    val featureVector: Array[(String, Int)] = sc.textFile("vocab_df_15201_0.2_from_400.txt").map{line =>
-    val a = line.split(",")
-    a(0) -> a(1).toInt
-  }.collect()
+//    val featureVector: Array[(String, Int)] = sc.textFile("vocab_df_15201_0.2_from_400.txt").map{line =>
+//    val a = line.split(",")
+//    a(0) -> a(1).toInt
+//  }.collect()
     val idfs: Array[(String, Double)] = inverseDocumentFrequencies(featureVector, numDocs)
     /* Computing inverse document frequencies 'idfs' from document frequencies */
     val idfsMap: Predef.Map[String, Double] = idfs.toMap
@@ -137,23 +154,23 @@ object LsaApp extends Logger {
 
     val tfVector: RDD[(String, Vector)] = termDocumentFrequencies.mapValues{termFreqPair =>
       val allIdentifiers: Predef.Map[String, Int] = termList.value/* Locally obtaining broadcasted  values */
-      val docTotalTerms: Double = termFreqPair.values.sum + 0.0
+      //val docTotalTerms: Double = termFreqPair.values.sum + 0.0
       val termInThisDocument: List[String] = termFreqPair.keySet.toList/* Obtaining all terms from this document*/
       val sizeOfVector: Int = allIdentifiers.size/* Computing number of terms(identifiers) across all the documents*/
       var tfidfMap:Map[Int,Double] = Map()/* Computing a map of (identifier, tfidf) pairs from term-document
            (identifier, count) pairs and document-frequency (identifier, idfs) pair */
       for(term <- termInThisDocument if allIdentifiers.contains(term)) {
-        tfidfMap += (allIdentifiers(term) -> termFreqPair(term)/docTotalTerms) /* TFIDF computation */
+        tfidfMap += (allIdentifiers(term) -> termFreqPair(term)) /* TFIDF computation */
       }
       val tfidfSeq: Seq[(Int, Double)] = tfidfMap.toSeq/* Converting 'tfidfMap' map to a sequence */
       Vectors.sparse(sizeOfVector, tfidfSeq) /*Obtaining sparse vector from 'tfidfSeq' sequence and 'sizeOfVector'*/
     }
 
     tfVector.persist(StorageLevel.MEMORY_AND_DISK)
-    val dataKeys = new PrintWriter(new File("tfVector_input_keys.txt" ))
+    val dataKeys = new PrintWriter(new File("tfVector_keys.txt" ))
     tfVector.keys.collect().foreach(dataKeys.println(_))
     dataKeys.close()
-    val dataValues = new PrintWriter(new File("tfVector_input_values.txt" ))
+    val dataValues = new PrintWriter(new File("tfVector_values.txt" ))
     tfVector.values.collect().map(_.toArray.mkString(" ")).foreach(dataValues.println(_))
     dataValues.close()
     tfVector.unpersist()
@@ -322,19 +339,22 @@ object LsaApp extends Logger {
   /* In step this cleaned text is splitted into list of words. And reserved words are removed from the list of words*/
   def extractIdentifierCountPairs(codeDataWithOutComments: RDD[(String, String)],reserveWords: Broadcast[List[String]]) 
   : RDD[(String, List[String])] = {
-    val identifiersForEachDocument: RDD[(String, List[String])] = codeDataWithOutComments.mapValues{codeWithOutComments =>
-      extractBagOfWords(codeWithOutComments,reserveWords)
-    }
+    val identifiersForEachDocument: RDD[(String, List[String])] = codeDataWithOutComments.mapPartitions(it => {
+      val cc:CamelCase = new CamelCase()
+      it.map{case(key,rawData) =>
+        val bagOfWords: List[String] = extractBagOfWords(rawData,reserveWords,cc)
+        (key,bagOfWords)
+      }
+    })
     identifiersForEachDocument
   }
 
-  def extractBagOfWords(codeWithOutComments: String,reserveWords: Broadcast[List[String]]) : List[String] = {
+  def extractBagOfWords(codeWithOutComments: String,reserveWords: Broadcast[List[String]],cc:CamelCase) : List[String] = {
     val listOfWords: List[String] = codeWithOutComments.split("\\s+").toList.filter(x => x != "") 
     /* Text 'inp' is splitted into list of words and stored in listOfWords'*/
     val allReserveWords: List[String] = reserveWords.value 
     /* Broadcasted listed of reserve words are accessed and stored in 'allReserveWords' */
     val removeReserveWords: ListBuffer[String] =  new ListBuffer[String]()/* 'removeReserveWords' is list buffer to strings */
-    val cc:CamelCase = new CamelCase()
     for(word <- listOfWords if !allReserveWords.contains(word)) {
       val words: List[String] = cc.splitCamelCase(word).split(" ").toList.map(_.toLowerCase)
       words.foreach(removeReserveWords+=_)
@@ -480,8 +500,8 @@ object LsaApp extends Logger {
     val (fileContent,count) = ZipBasicParser.readFilesAndPackages(zipIn)
 
     val lines = removeCommentsAndSpecilChars(fileContent)
-
-    val bagOfWords = extractBagOfWords(lines,reserveWords)
+    val cc:CamelCase = new CamelCase()
+    val bagOfWords = extractBagOfWords(lines,reserveWords,cc)
 
     val pairs: Predef.Map[String, Int] = bagOfWords.groupBy(x => x).mapValues(_.size)
 
